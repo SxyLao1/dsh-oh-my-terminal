@@ -60,6 +60,7 @@ import { createWsHandlers } from './ws-handler.js';
 import { createRouteHandler } from './routes.js';
 import type { CreateSessionOptions } from './routes.js';
 import { makeId, getSessionCounter, resolveSpawn, resolveSessionCwd } from './routes.js';
+import { registerSettingsIntegration } from './settings/index.js';
 
 const log = createLogger('terminal-host');
 
@@ -434,6 +435,9 @@ export function apply(ctx: Context, config: Config): void {
       upgradeDisposers,
     }),
   });
+
+  // —— settings 集成（可选，软探测）——
+  registerSettingsIntegration(ctx);
 
   // —— 插件销毁清理 ——
   ctx.effect(() => {

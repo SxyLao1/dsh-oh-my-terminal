@@ -54,6 +54,8 @@ import {
 } from './client/hooks.js';
 import { injectStyles } from './client/styles.js';
 import { TermPane, RestartButton } from './client/term-pane.js';
+import { TerminalSettingsCard } from './client/settings/card.js';
+import { injectSettingsStyles } from './client/settings/styles.js';
 import {
   resetShortcutsState, markShortcutsActive,
   registerPanelToggler, notifyPanelToggle,
@@ -65,6 +67,7 @@ const log = createLogger('terminal-client');
 
 // —— 模块加载时幂等注入 CSS ——
 injectStyles();
+injectSettingsStyles();
 
 // —— dsh 客户端 slots 服务类型 ——
 // dsh-client-ui-slots 与 dsh-client-ui-renderer 是 dsh 浏览器 bundle 运行期注入的
@@ -76,10 +79,12 @@ injectStyles();
 interface SlotRegisterOptions {
   /** 槽位命名空间名 */
   name: string;
-  /** 本条目 id（在同一槽内唯一） */
-  id: string;
+  /** 本条目 id（list 槽必需；keyed 槽用 key 定位） */
+  id?: string;
+  /** keyed 槽的条目键（如 plugins.row.config 的 `<包名>#<行 id>`） */
+  key?: string;
   /** 排序权重（小者先） */
-  order: number;
+  order?: number;
 }
 
 /** slots 服务的最小接口（完整定义见 @deepseek-ai/dsh-client-ui-slots） */
@@ -118,6 +123,29 @@ export function apply(ctx: ClientContext): void {
   ctx.slots.inject('conversation.input.dock', () => ctx.slots.register(
     { name: 'conversation.input.dock', id: 'terminal', order: 10 },
     TerminalPanel,
+  ));
+  registerSettingsPage(ctx);
+}
+
+/** 插件在 profile patch 中的条目 id（rowConfigKey 的后半段，不可随意改动） */
+const SETTINGS_ROW_ID = 'terminal-panel';
+
+/**
+ * 在插件管理页注册本插件的配置页（`plugins.row.config` 槽）。
+ *
+ * key 必须是 `<包名>#<profile 条目 id>`——dsh 的 ui-plugin-manager 用
+ * `rowConfigKey(包名, 行 id)` 在账本里查找注册项，命中才给该行渲染跳转箭头
+ * （PlanManagerPage 的 RowsSection：configure.has(row) 为真才包成 button）。
+ * 包名取本模块的 `name`，行 id 取 cordis.patch.yml 声明的 id。
+ *
+ * 槽不存在时（旧宿主）inject 不激活，配置页自然缺失，面板功能不受影响。
+ *
+ * @param ctx - 远端页面的 cordis 上下文
+ */
+function registerSettingsPage(ctx: ClientContext): void {
+  ctx.slots.inject('plugins.row.config', () => ctx.slots.register(
+    { name: 'plugins.row.config', key: `${name}#${SETTINGS_ROW_ID}` },
+    TerminalSettingsCard,
   ));
 }
 
