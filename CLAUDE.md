@@ -64,10 +64,25 @@ src/
 │   ├── styles.ts           # CSS 样式常量（PANEL_CSS）+ Campbell 暗色主题 + xterm 调优常量 + injectStyles()
 │   ├── dropdown.tsx        # +号旁下拉菜单组件（新建/拆分/按种类新建）
 │   ├── side-list.tsx       # 右侧终端列表面板（树形前缀 + 右键重命名 + useMemo 缓存）
+│   ├── terminal/
+│   │   └── use-tabs.ts     # 终端标签页状态管理（useTerminalTabs Hook：newTab/splitTerminal/closeTerminal/renameTerminal）
+│   ├── settings/
+│   │   ├── types.ts        # 设置页面类型定义（SettingsPageProps、ConfigWithProfiles）
+│   │   ├── store.ts        # 设置页面状态管理（useSettingsState Hook）
+│   │   └── card.tsx        # 设置卡片组件（SettingsCard）
 │   ├── icons.tsx           # SVG 图标组件集合（10 个纯函数）
 │   └── clipboard.ts        # 剪贴板纯函数（Async Clipboard API + legacy 双层降级）
+├── terminal/
+│   ├── index.ts            # 终端模块统一导出（kinds/detect/resolve/store）
+│   ├── kinds.ts            # 终端种类定义（TerminalKind 联合类型 + KIND_SPECS 平台映射表）
+│   ├── detect.ts           # 终端探测（resolveCommand/detectGitBash/detectTerminalProfiles）
+│   ├── resolve.ts          # 配置解析（resolveProfile：TerminalProfile → node-pty spawn 参数）
+│   └── store.ts            # 配置表校验（validateAdd/validateUpdate/validateDelete/addProfile/updateProfile/deleteProfile）
+├── settings/
+│   ├── namespace.ts        # Settings 命名空间定义（SettingsNamespace）
+│   └── bridge.ts           # Settings 桥接层（prepareProfiles：配置表与探测结果合并）
 ├── persistence.ts          # 会话持久化层（SessionStore：日志落盘/清理、元数据读写、启动恢复）
-├── platform.ts             # 平台适配层（PlatformAdapter 接口 + POSIX/Windows 适配器 + Git Bash 探测 + 默认 shell 探测）
+├── platform.ts             # 平台适配层（PlatformAdapter 接口 + POSIX/Windows 适配器 + 默认 shell 探测）
 ├── constants.ts            # 协议/尺寸/快捷键/环境变量/文件名常量
 ├── server-command.ts       # 命令行解析工具（shell 命令拆分与转义）
 ├── shortcut.ts             # 快捷键解析工具（toggle 快捷键字符串 → KeyboardEvent 匹配）
@@ -78,16 +93,25 @@ src/
 
 ```
 宿主半：
-  index.ts → routes.ts → constants.ts, platform.ts, persistence.ts, server-command.ts, logger.ts
+  index.ts → routes.ts → terminal/, settings/, constants.ts, platform.ts, persistence.ts, server-command.ts, logger.ts
   index.ts → ws-handler.ts → constants.ts, persistence.ts
-  index.ts → constants.ts, platform.ts, persistence.ts, logger.ts
+  index.ts → terminal/, settings/, constants.ts, platform.ts, persistence.ts, logger.ts
+  settings/bridge.ts → terminal/detect.ts, terminal/kinds.ts, logger.ts
+  terminal/detect.ts → terminal/kinds.ts
+  terminal/resolve.ts → terminal/kinds.ts, platform.ts
+  terminal/store.ts → terminal/kinds.ts
+  platform.ts → terminal/detect.ts（复用 resolveCommand）
   persistence.ts → constants.ts, logger.ts
 
 浏览器半：
   client.tsx → client/types.ts, client/icons.tsx, client/clipboard.ts,
                client/dropdown.tsx, client/side-list.tsx, client/hooks.ts,
-               client/styles.ts, client/term-pane.tsx, logger.ts
+               client/styles.ts, client/term-pane.tsx, client/settings/,
+               client/terminal/, logger.ts
   client/hooks.ts → client/types.ts, shortcut.ts, logger.ts
+  client/terminal/use-tabs.ts → client/types.ts, logger.ts
+  client/settings/card.tsx → client/settings/types.ts, client/settings/store.ts, client/icons.tsx
+  client/settings/store.ts → client/settings/types.ts
   client/dropdown.tsx → client/types.ts, client/icons.tsx
   client/side-list.tsx → client/types.ts, client/icons.tsx
   client/term-pane.tsx → client/types.ts, client/clipboard.ts, client/icons.tsx, client/styles.ts
@@ -98,7 +122,26 @@ src/
 
 ### 状态管理
 
-浏览器半使用 `useReducer` 统一管理终端状态（`TerminalState`），消除原先 instances/groups/activeInstanceId 三轨独立 state 的同步负担。所有 CRUD 操作通过 `dispatch(TerminalAction)` 提交，reducer 是纯函数。`/config` 只拉取一次（`useConfig` Hook），同时获取快捷键配置和终端种类列表。
+浏览器半使用 `useReducer` 统一管理终端状态（`TerminalState`），消除原先 instances/groups/activeInstanceId 三轨独立 state 的同步负担。所有 CRUD 操作通过 `dispatch(TerminalAction)` 提交，reducer 是纯函数。`/config` 只拉取一次（`useConfig` Hook），同时获取快捷键配置和终端配置表（`terminalProfiles`）。
+
+### 终端配置模型（type / name / path）
+
+终端种类不再硬编码在 `platform.ts`，而是由配置表驱动：
+
+| 字段 | 说明 |
+|------|------|
+| `type` | 终端类型（`TerminalKind`）：pwsh / powershell / cmd / bash / zsh / fish / gitbash / nushell / custom。决定 spawn 语义与交互参数 |
+| `name` | 下拉菜单显示名。用户可改，跨重启保留 |
+| `path` | 可执行文件路径。留空则按 `type` 在 `$PATH` 中解析 |
+| `origin` | `auto`（启动探测）/ `user`（手动新增）。`auto` 项不可删除、path 不可改，但可改名 |
+
+**启动流程**：`prepareProfiles()` 在 apply 时跑一次 `$PATH` 探测（`detectTerminalProfiles()`），与已保存的配置表合并（`mergeProfiles()`：已保存项全保留，探测到的新 type/path 补进去）。首次运行（配置表为空）时把结果写回配置。
+
+**路径解析**：`resolveProfile()` 把 `TerminalProfile` 转成 node-pty 的 `{ file, args }`。**Windows 上 node-pty 不做 PATH/PATHEXT 查找**，裸命令名（`pwsh`、`cmd`）会直接以 `File not found: ` 失败，必须给完整路径——`resolveCommand()` 用 `where`/`which` 解析，并过滤 `WindowsApps` 下的 App Execution Alias 占位符（0 字节重解析点，spawn 必失败）。
+
+**持久化**：配置表在 `Config` schema 里是 **JSON 字符串**（`terminalProfiles`），不是嵌套数组——schemastery 对对象数组的 round-trip 行为不保证，字符串是唯一稳定形态。空串 = 用启动探测结果。
+
+**API 契约**：客户端只传 `profileId`（配置表 id），不传路径与参数。`POST /sessions` 的 `profileId` 字段与宿主半 `routes.ts` 的读取字段名必须一致——曾因客户端发 `terminalType`、宿主半读 `profileId` 导致下拉菜单静默失效（始终回落到默认 shell）。
 
 ## 经验教训与硬约束
 
@@ -112,6 +155,8 @@ src/
 - **xterm.css**：构建时从 `node_modules/@xterm/xterm/css/xterm.css` 复制到 `lib/xterm.css`，由宿主半 serve
 - **终端数据绝不进日志**：pty 输出与 WebSocket 数据帧是用户会话内容，不写日志
 - **CSS overflow:hidden 陷阱**：包含 `position:absolute` 浮层（如下拉菜单）的容器不能设 `overflow:hidden`，否则浮层被裁剪不可见
+- **Windows 上 spawn 必须给完整路径**：node-pty 的 `spawn` 在 Windows 上**不做 PATH/PATHEXT 查找**，传裸命令名（`pwsh`、`cmd`、`bash`）直接以 `File not found: ` 失败（错误消息里的路径是空串，极易误判为 cwd 问题）。所有终端命令都要先经 `where`/`which` 解析成绝对路径，并过滤 `WindowsApps` 下的 App Execution Alias 占位符
+- **跨半字段名必须逐字对齐**：宿主半与浏览器半经 HTTP 通信、无编译期校验，字段名拼写不一致会静默回落到默认分支（曾因客户端发 `terminalType`、宿主半读 `profileId`，导致下拉菜单选了任何类型都开出默认 shell，且无任何报错）
 - **单文件行数阈值**：建议 <600 行。超过时按职责边界拆分到子模块，不要按"太长了"随意切半
 
 ## 约束
