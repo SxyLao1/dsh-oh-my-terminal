@@ -2,17 +2,17 @@
  * @file 平台适配器
  * @description 封装 OS 差异，业务逻辑不关心平台。
  *              新增平台只需实现 {@link PlatformAdapter} 接口并在 `platform`
- *              选择器里注册，不需要修改 resolveSpawn / buildSessionEnv /
- *              builtinTerminalTypes 等业务代码。
+ *              选择器里注册，不需要修改 resolveSpawn / buildSessionEnv 等业务代码。
  *
  *              POSIX 适配器处理 openpty 环境（TERM/COLORTERM/LANG/LC_ALL 等），
  *              Windows 适配器处理 ConPTY 环境（仅 PYTHONIOENCODING）。
  *              node-pty 自动按平台选 ConPTY 或 openpty，本模块不手动 fork。
+ *
+ *              终端种类（pwsh/cmd/bash 等）已迁出本模块——见 {@link module:terminal}，
+ *              由配置表 + 启动探测驱动，本模块只保留环境与默认 shell 探测。
  */
 
-import { execSync } from 'node:child_process';
-import { join, dirname } from 'node:path';
-import { existsSync } from 'node:fs';
+import { resolveCommand } from './terminal/detect.js';
 
 /** spawn 参数：node-pty spawn(file, args, opts) 的 file 和 args */
 export interface SpawnArgs {
@@ -22,21 +22,11 @@ export interface SpawnArgs {
   args: string[];
 }
 
-/** 终端种类条目（/config 返回给浏览器半，未来扩展 bash/zsh/fish 只需加条目） */
-export interface TerminalType {
-  /** 种类 id */
-  id: string;
-  /** 显示标签 */
-  label: string;
-  /** shell 命令行（空串 = 平台默认） */
-  command: string;
-}
-
 /**
  * 平台适配器接口——封装所有 OS 差异，业务逻辑不关心平台。
  *
  * 新增平台只需实现此接口并在 `platform` 选择器里注册，不需要修改 resolveSpawn /
- * platform.buildSessionEnv / platform.builtinTerminalTypes 等业务代码。
+ * platform.buildSessionEnv 等业务代码。
  */
 export interface PlatformAdapter {
   /** 探测平台默认 shell 可执行文件路径 */
@@ -50,8 +40,6 @@ export interface PlatformAdapter {
   buildSessionEnv(): Record<string, string>;
   /** node-pty spawn 的 name 参数（终端类型描述符） */
   ptyName: string;
-  /** 内置终端种类列表（/config 返回给浏览器半） */
-  builtinTerminalTypes: TerminalType[];
 }
 
 /**
@@ -137,35 +125,7 @@ const posixAdapter: PlatformAdapter = {
     return env;
   },
   ptyName: 'xterm-256color',
-  builtinTerminalTypes: [
-    { id: 'default', label: '默认 Shell', command: '' },
-    { id: 'bash', label: 'Bash', command: 'bash -l' },
-    { id: 'zsh', label: 'Zsh', command: 'zsh -l' },
-  ],
 };
-
-/**
- * 探测 Git Bash 的 bash.exe 路径。
- *
- * 从 git.exe 的安装位置推断：git.exe 通常在 <GitRoot>/cmd/git.exe，
- * bash.exe 在 <GitRoot>/bin/bash.exe。找不到时返回 null。
- *
- * @returns bash.exe 绝对路径，未安装 Git 时返回 null
- */
-function detectGitBash(): string | null {
-  try {
-    // 从 PATH 中找 git.exe
-    const gitPath = execSync('where git', { encoding: 'utf8', timeout: 3000 }).trim().split(/\r?\n/)[0];
-    if (typeof gitPath !== 'string' || gitPath.length === 0) return null;
-    // git.exe 在 <GitRoot>/cmd/git.exe → bash.exe 在 <GitRoot>/bin/bash.exe
-    const gitDir = dirname(dirname(gitPath));
-    const bashPath = join(gitDir, 'bin', 'bash.exe');
-    return existsSync(bashPath) ? bashPath : null;
-  } catch {
-    /* git 未安装或 where 命令失败——忽略 */
-    return null;
-  }
-}
 
 /**
  * 探测 Windows 上用户偏好的默认 shell。
@@ -176,18 +136,10 @@ function detectGitBash(): string | null {
  * @returns 默认 shell 可执行文件路径
  */
 function detectWin32DefaultShell(): string {
-  try {
-    // 优先检查 pwsh（PowerShell 7）
-    try {
-      const pwshPath = execSync('where pwsh', { encoding: 'utf8', timeout: 3000 }).trim().split(/\r?\n/)[0];
-      if (typeof pwshPath === 'string' && pwshPath.length > 0) return pwshPath;
-    } catch { /* pwsh 未安装 */ }
-    // 回落到 powershell（Windows PowerShell 5）
-    try {
-      const psPath = execSync('where powershell', { encoding: 'utf8', timeout: 3000 }).trim().split(/\r?\n/)[0];
-      if (typeof psPath === 'string' && psPath.length > 0) return psPath;
-    } catch { /* powershell 未安装（极罕见） */ }
-  } catch { /* child_process 不可用 */ }
+  const pwsh = resolveCommand('pwsh');
+  if (pwsh !== null) return pwsh;
+  const powershell = resolveCommand('powershell');
+  if (powershell !== null) return powershell;
   // 最终回落 COMSPEC
   const comspec = process.env.COMSPEC;
   if (typeof comspec === 'string' && comspec.length > 0) return comspec;
@@ -215,19 +167,6 @@ const win32Adapter: PlatformAdapter = {
     return env;
   },
   ptyName: 'xterm-256color',
-  get builtinTerminalTypes(): TerminalType[] {
-    // 动态构建终端种类列表——探测 Git Bash 是否可用
-    const types: TerminalType[] = [
-      { id: 'default', label: '默认 Shell', command: '' },
-      { id: 'pwsh', label: 'PowerShell', command: 'pwsh' },
-      { id: 'cmd', label: 'Command Prompt', command: 'cmd' },
-    ];
-    const gitBash = detectGitBash();
-    if (gitBash !== null) {
-      types.push({ id: 'gitbash', label: 'Git Bash', command: gitBash });
-    }
-    return types;
-  },
 };
 
 /** 按 process.platform 选择适配器——未知平台回落 POSIX */

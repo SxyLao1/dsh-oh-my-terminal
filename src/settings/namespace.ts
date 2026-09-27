@@ -17,9 +17,12 @@
 export const SETTINGS_NS = 'terminal-panel';
 
 /**
- * settings bridge 路由前缀
+ * settings bridge 路由前缀（相对片段）
  *
- * 拼接在插件主路由 `/api/dsh-oh-my-terminal` 之后，形成完整路由路径：
+ * 这是**相对片段**，必须与插件主路由前缀 {@link ROUTE_PREFIX}
+ * （`/api/dsh-oh-my-terminal`）拼接后才构成 webServer 注册所需的绝对路径——
+ * `WebRoute.path` 要求绝对路径，直接注册 `/settings/describe` 会导致路由
+ * 不匹配任何请求，表现为前端拿 404。完整路径：
  * - GET  /api/dsh-oh-my-terminal/settings/describe
  * - POST /api/dsh-oh-my-terminal/settings/mutate
  */
@@ -34,14 +37,14 @@ export const BRIDGE_PREFIX = '/settings';
  *
  * 5 个字段对应插件 Config 的 5 个 volatile 字段：
  * - toggleShortcut: 展开/收起面板的快捷键
- * - shellCommand: 新终端的 shell 命令行
+ * - terminalProfiles: 终端配置表（JSON 字符串）
  * - fontFamily: 终端字体族
  * - fontSize: 终端字号（像素）
  * - lineHeight: 终端行高倍数
  */
 export const WRITABLE_FIELDS: readonly string[] = [
   'toggleShortcut',
-  'shellCommand',
+  'terminalProfiles',
   'fontFamily',
   'fontSize',
   'lineHeight',

@@ -260,8 +260,8 @@ function TerminalPanel(props: TerminalPanelProps): ReactElement {
     workspaceCwd, sessionId,
   });
 
-  /* —— 统一配置拉取（/config：快捷键 + 字体 + 终端种类，单次请求） + 全局 keydown 监听 —— */
-  const { shortcutLabel, fontFamily, fontSize, lineHeight, terminalTypes } = useConfig(setOpen);
+  /* —— 统一配置拉取（/config：快捷键 + 字体 + 终端配置表，单次请求） + 全局 keydown 监听 —— */
+  const { shortcutLabel, fontFamily, fontSize, lineHeight, terminalProfiles } = useConfig(setOpen);
 
   /** 首次打开已处理标记（关闭最后一个终端不自动新建，只有全新打开才建） */
   const openHandled = useRef(false);
@@ -293,10 +293,20 @@ function TerminalPanel(props: TerminalPanelProps): ReactElement {
       ? (instances.length === 0 ? '无会话' : '空闲')
       : (activeInstance.exited ? instanceLabel(activeInstance) + ' 已退出，点 ⟳ 重启' : instanceLabel(activeInstance));
 
-  /** 按种类新建终端 */
-  const handleNewByType = useCallback((typeId: string): void => {
-    void newTab(typeId);
-  }, [newTab]);
+  /**
+   * 按配置 id 新建终端。
+   *
+   * 下拉菜单传进来的是配置 id（如 'pwsh-1'、'cmd'），从 /config 下发的
+   * terminalProfiles 里找到该配置，调用宿主半的 POST /sessions 新建终端。
+   */
+  const handleNewByType = useCallback((profileId: string): void => {
+    const profile = terminalProfiles.find(p => p.id === profileId);
+    if (profile === undefined) {
+      log.warn(`未知的终端配置 id：${profileId}`);
+      return;
+    }
+    void newTab(profile.id);
+  }, [newTab, terminalProfiles]);
 
   /** 重命名终端实例（更新本地 title） */
   const handleRename = useCallback((instanceId: string, newName: string): void => {
@@ -354,7 +364,7 @@ function TerminalPanel(props: TerminalPanelProps): ReactElement {
                 busy,
                 onNewTerminal: () => { void newTab(); },
                 onSplitTerminal: () => { void splitTerminal(); },
-                terminalTypes,
+                terminalProfiles,
                 onNewByType: handleNewByType,
               }),
             ),

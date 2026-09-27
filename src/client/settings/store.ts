@@ -78,10 +78,11 @@ export type FormAction =
 export function createInitialFormState(): FormState {
   const emptyValues: TerminalSettingsValues = {
     toggleShortcut: '',
-    shellCommand: '',
     fontFamily: '',
     fontSize: 0,
     lineHeight: 0,
+    /* 空串 = 宿主半用启动探测结果（与 Config schema 的默认值语义一致） */
+    terminalProfiles: '',
   };
   return {
     status: 'idle',

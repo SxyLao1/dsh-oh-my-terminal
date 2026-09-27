@@ -18,7 +18,7 @@ import { SHORTCUT_COMMAND_ID } from '../../constants.js';
 import { createLogger } from '../../logger.js';
 import type {
   TerminalInstance, TerminalGroup, TerminalState, TerminalAction,
-  CreateSessionResponse, ConfigResponse, DeleteSessionResponse, TerminalType,
+  CreateSessionResponse, ConfigResponse, DeleteSessionResponse, TerminalProfile,
 } from '../types.js';
 
 const log = createLogger('terminal-client');
@@ -30,16 +30,29 @@ const PREFIX = '/api/dsh-oh-my-terminal';
 const DEFAULT_SHORTCUT_STR = 'ctrl+shift+`';
 
 /**
- * 通用 fetch 封装：拼前缀、检查 ok、解析 JSON。
+ * HTTP 请求封装：非 2xx 时抛出带后端错误详情的异常。
  *
- * @param path - 路由路径（不含前缀）
+ * 宿主半的失败响应体形如 `{ error: string, code?: string }`（见 routes.ts 的
+ * 错误分支）。此前的实现只抛状态码，把后端的中文诊断（如「终端原生绑定加载
+ * 失败（平台 win32-x64）…」）整个丢掉，排查时只剩一个 500——这里读回响应体，
+ * 把错误消息接进异常，浏览器控制台才有可用的定位信息。
+ *
+ * @param path - 路由路径（不含 PREFIX）
  * @param opts - fetch 选项
  * @returns 解析后的 JSON
- * @throws Error 非 2xx 状态码
+ * @throws Error 状态码非 2xx，消息含后端 error 字段（解析失败时回落状态码）
  */
 async function api<T>(path: string, opts?: RequestInit): Promise<T> {
   const res = await fetch(PREFIX + path, opts);
-  if (!res.ok) throw new Error('dsh-oh-my-terminal ' + res.status);
+  if (!res.ok) {
+    /* 响应体可能不是 JSON（网关拦截等），解析失败时回落到状态码 */
+    let detail = '';
+    try {
+      const body = (await res.json()) as { error?: unknown; code?: unknown };
+      if (typeof body.error === 'string' && body.error.length > 0) detail = body.error;
+    } catch { /* 非 JSON 响应体——用状态码兜底 */ }
+    throw new Error(detail.length > 0 ? detail : 'dsh-oh-my-terminal ' + res.status);
+  }
   return (await res.json()) as T;
 }
 
@@ -79,12 +92,12 @@ export interface ConfigResult {
   fontSize: number | undefined;
   /** 终端行高（undefined 时 TermPane 用内置默认） */
   lineHeight: number | undefined;
-  /** 终端种类列表 */
-  terminalTypes: TerminalType[];
+  /** 终端配置列表 */
+  terminalProfiles: TerminalProfile[];
 }
 
 /**
- * 统一拉取 /config：一次请求同时获取 toggleShortcut 和 terminalTypes。
+ * 统一拉取 /config：一次请求同时获取 toggleShortcut 和 terminalProfiles。
  *
  * 消除原先 usePanelShortcut 与 client.tsx 分别拉取 /config 的双次请求问题。
  * 路由缺失时（旧宿主）回落默认值。
@@ -96,13 +109,13 @@ export interface ConfigResult {
  *   toggleShortcut（settings/env 依旧生效）
  *
  * @param setOpen - 展开/折叠 state setter（keydown 命中时切换）
- * @returns 快捷键 spec、显示标签、终端种类列表
+ * @returns 快捷键 spec、显示标签、终端配置列表
  */
 export function useConfig(setOpen: React.Dispatch<React.SetStateAction<boolean>>): ConfigResult {
   const { useEffect, useState } = React;
   const defaultShortcut = parseShortcut(DEFAULT_SHORTCUT_STR);
   const [shortcut, setShortcut] = useState<ShortcutSpec | null>(defaultShortcut);
-  const [terminalTypes, setTerminalTypes] = useState<TerminalType[]>([]);
+  const [terminalProfiles, setTerminalProfiles] = useState<TerminalProfile[]>([]);
   /* 终端字体族/字号/行高：/config 下发；空串/未下发时 TermPane 用内置默认 */
   const [fontFamily, setFontFamily] = useState('');
   const [fontSize, setFontSize] = useState<number | undefined>(undefined);
@@ -111,7 +124,7 @@ export function useConfig(setOpen: React.Dispatch<React.SetStateAction<boolean>>
   const [catalogLabel, setCatalogLabel] = useState<string | null>(null);
   const shortcutLabel = catalogLabel ?? shortcut?.label ?? 'Ctrl+Shift+`';
 
-  /* 一次拉取 /config，同时填充快捷键和终端种类 */
+  /* 一次拉取 /config，同时填充快捷键和终端配置表 */
   useEffect(() => {
     void (async (): Promise<void> => {
       try {
@@ -126,9 +139,9 @@ export function useConfig(setOpen: React.Dispatch<React.SetStateAction<boolean>>
         if (typeof cfg.fontFamily === 'string') setFontFamily(cfg.fontFamily);
         if (typeof cfg.fontSize === 'number' && Number.isFinite(cfg.fontSize) && cfg.fontSize > 0) setFontSize(cfg.fontSize);
         if (typeof cfg.lineHeight === 'number' && Number.isFinite(cfg.lineHeight) && cfg.lineHeight > 0) setLineHeight(cfg.lineHeight);
-        // 3. 填充终端种类列表
-        if (Array.isArray(cfg.terminalTypes)) {
-          setTerminalTypes(cfg.terminalTypes);
+        // 3. 填充终端配置表
+        if (Array.isArray(cfg.terminalProfiles)) {
+          setTerminalProfiles(cfg.terminalProfiles);
         }
       } catch {
         /* 旧宿主无 /config——保持默认 */
@@ -172,7 +185,7 @@ export function useConfig(setOpen: React.Dispatch<React.SetStateAction<boolean>>
     return () => window.removeEventListener('keydown', onKey);
   }, [shortcut, setOpen]);
 
-  return { shortcut, shortcutLabel, fontFamily, fontSize, lineHeight, terminalTypes };
+  return { shortcut, shortcutLabel, fontFamily, fontSize, lineHeight, terminalProfiles };
 }
 
 /** useTerminalTabs 的入参 */
@@ -194,13 +207,13 @@ export interface TerminalTabsParams {
 /** useTerminalTabs 返回值 */
 export interface TerminalTabs {
   /** + 按钮新建终端（创建新实例 + 独立组） */
-  newTab: (shell?: string, cmdline?: string) => Promise<void>;
+  newTab: (profileId?: string, cmdline?: string) => Promise<void>;
   /** ✕ 按钮关闭终端（从 instances 和 groups 中同时移除） */
   closeTab: (id: string) => Promise<void>;
   /** ⟳ 重启活跃终端（更新 instances 和 groups 中的引用） */
   restartActive: () => Promise<void>;
   /** 拆分终端（在当前活跃实例所在 group 中插入新实例） */
-  splitTerminal: (shell?: string, cmdline?: string) => Promise<void>;
+  splitTerminal: (profileId?: string, cmdline?: string) => Promise<void>;
   /** WebSocket close 事件回调（标记实例已退出） */
   onExit: (id: string) => void;
 }
@@ -225,19 +238,22 @@ export function useTerminalTabs(params: TerminalTabsParams): TerminalTabs {
    * 新建时尝试从当前 DOM 读取活跃终端的 data-cwd，回落 activeInstance.cwd 或
    * workspaceCwd。客户端 cwd 查询失败时经 DSH 工作区注册表解析工作区路径。
    *
-   * 终端种类选择接口预留：可选传 shell（终端种类 id，如 "bash"/"zsh"）或
-   * cmdline（完整启动命令）；v1 默认不传，用宿主半配置的默认 shell。
+   * 终端种类选择：可选传 terminalType（/config 下发的种类 id，如 "pwsh"）
+   * 或 cmdline（完整启动命令）；都不传时用宿主半配置的默认 shell。
    *
-   * @param shell - 终端种类 id（可选，缺省用默认 shell）
-   * @param cmdline - 完整启动命令（可选，优先于 shell）
+   * 只传 id、不传命令本身——id 到命令的映射在宿主半（platform 适配器），
+   * 前端复制一份既会漂移，也拿不到 Windows 上裸命令名的 PATH 解析结果。
+   *
+   * @param terminalType - 终端种类 id（可选，缺省用默认 shell）
+   * @param cmdline - 完整启动命令（可选，优先于 terminalType）
    */
-  const newTab = useCallback(async (shell?: string, cmdline?: string): Promise<void> => {
+  const newTab = useCallback(async (profileId?: string, cmdline?: string): Promise<void> => {
     dispatch({ type: 'SET_BUSY', busy: true });
     try {
       const cwd = workspaceCwd ?? activeInstance?.cwd ?? null;
       const body: Record<string, unknown> = { cwd, sessionId };
-      /* 终端种类选择：传 shell 或 cmdline 让宿主半按指定种类创建 PTY */
-      if (typeof shell === 'string' && shell.length > 0) body.shell = shell;
+      /* 终端配置 id：宿主半按 id 查表解析 path 与交互参数 */
+      if (typeof profileId === 'string' && profileId.length > 0) body.profileId = profileId;
       if (typeof cmdline === 'string' && cmdline.length > 0) body.cmdline = cmdline;
       const s = await post<CreateSessionResponse>('/sessions', body);
 
@@ -259,7 +275,7 @@ export function useTerminalTabs(params: TerminalTabsParams): TerminalTabs {
 
       dispatch({ type: 'ADD_INSTANCE', instance: newInstance, group: newGroup });
     } catch (err) {
-      log.error('新建终端失败', err);
+      log.error('新建终端失败', err instanceof Error ? err.message : String(err));
     } finally {
       dispatch({ type: 'SET_BUSY', busy: false });
     }
@@ -271,20 +287,20 @@ export function useTerminalTabs(params: TerminalTabsParams): TerminalTabs {
    * 新实例与活跃实例同属一个 group，水平并排显示。若当前无活跃实例或无活跃组，
    * 退化为 newTab 行为（创建独立组）。
    *
-   * @param shell - 终端种类 id（可选，缺省用默认 shell）
-   * @param cmdline - 完整启动命令（可选，优先于 shell）
+   * @param profileId - 终端配置 id（可选，缺省用默认 shell）
+   * @param cmdline - 完整启动命令（可选，优先于 profileId）
    */
-  const splitTerminal = useCallback(async (shell?: string, cmdline?: string): Promise<void> => {
+  const splitTerminal = useCallback(async (profileId?: string, cmdline?: string): Promise<void> => {
     /* 无活跃组时退化为新建独立组 */
     if (activeGroup === null) {
-      await newTab(shell, cmdline);
+      await newTab(profileId, cmdline);
       return;
     }
     dispatch({ type: 'SET_BUSY', busy: true });
     try {
       const cwd = workspaceCwd ?? activeInstance?.cwd ?? null;
       const body: Record<string, unknown> = { cwd, sessionId };
-      if (typeof shell === 'string' && shell.length > 0) body.shell = shell;
+      if (typeof profileId === 'string' && profileId.length > 0) body.profileId = profileId;
       if (typeof cmdline === 'string' && cmdline.length > 0) body.cmdline = cmdline;
       const s = await post<CreateSessionResponse>('/sessions', body);
 
