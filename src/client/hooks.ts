@@ -484,6 +484,8 @@ export interface ConfigResult {
   fontFamily: string;
   /** 终端字号（像素）；undefined = 未下发，用内置默认值 */
   fontSize: number | undefined;
+  /** 终端行高倍数；undefined = 未下发，用内置默认值 */
+  lineHeight: number | undefined;
   /** 终端种类列表 */
   terminalTypes: TerminalType[];
 }
@@ -508,9 +510,10 @@ export function useConfig(setOpen: React.Dispatch<React.SetStateAction<boolean>>
   const defaultShortcut = parseShortcut(DEFAULT_SHORTCUT_STR);
   const [shortcut, setShortcut] = useState<ShortcutSpec | null>(defaultShortcut);
   const [terminalTypes, setTerminalTypes] = useState<TerminalType[]>([]);
-  /* 终端字体族/字号：/config 下发；空串/未下发时 TermPane 用内置默认 */
+  /* 终端字体族/字号/行高：/config 下发；空串/未下发时 TermPane 用内置默认 */
   const [fontFamily, setFontFamily] = useState('');
   const [fontSize, setFontSize] = useState<number | undefined>(undefined);
+  const [lineHeight, setLineHeight] = useState<number | undefined>(undefined);
   /* shortcuts 接入后的当前生效绑定标签；未接入时 null（走 shortcut.label） */
   const [catalogLabel, setCatalogLabel] = useState<string | null>(null);
   const shortcutLabel = catalogLabel ?? shortcut?.label ?? 'Ctrl+Shift+`';
@@ -526,9 +529,10 @@ export function useConfig(setOpen: React.Dispatch<React.SetStateAction<boolean>>
           if (parsed !== null) setShortcut(parsed);
           else log.warn('忽略无效的 toggleShortcut', cfg.toggleShortcut);
         }
-        // 2. 取字体族与字号（空串/缺省时 TermPane 回落内置默认）
+        // 2. 取字体族、字号、行高（空串/缺省时 TermPane 回落内置默认）
         if (typeof cfg.fontFamily === 'string') setFontFamily(cfg.fontFamily);
         if (typeof cfg.fontSize === 'number' && Number.isFinite(cfg.fontSize) && cfg.fontSize > 0) setFontSize(cfg.fontSize);
+        if (typeof cfg.lineHeight === 'number' && Number.isFinite(cfg.lineHeight) && cfg.lineHeight > 0) setLineHeight(cfg.lineHeight);
         // 3. 填充终端种类列表
         if (Array.isArray(cfg.terminalTypes)) {
           setTerminalTypes(cfg.terminalTypes);
@@ -575,7 +579,7 @@ export function useConfig(setOpen: React.Dispatch<React.SetStateAction<boolean>>
     return () => window.removeEventListener('keydown', onKey);
   }, [shortcut, setOpen]);
 
-  return { shortcut, shortcutLabel, fontFamily, fontSize, terminalTypes };
+  return { shortcut, shortcutLabel, fontFamily, fontSize, lineHeight, terminalTypes };
 }
 
 // —— Hook 5: useTerminalTabs（改造为接收 dispatch） ——

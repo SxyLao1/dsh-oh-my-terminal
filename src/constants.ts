@@ -60,6 +60,9 @@ export const DEFAULT_FONT_FAMILY = "ui-monospace, SFMono-Regular, 'Cascadia Mono
 /** 默认 xterm 字号（像素）——TUI agent 输出密度与可读性的折中 */
 export const DEFAULT_FONT_SIZE = 12.5;
 
+/** 默认 xterm 行高倍数——紧凑但不挤行 */
+export const DEFAULT_LINE_HEIGHT = 1.25;
+
 /**
  * 在 DSH shortcuts 系统注册的"切换终端面板"命令 id。
  * DSH 0.1.7-rc.2 起宿主自带终端（terminal.new）占用 Ctrl+`，本插件改注册
@@ -92,6 +95,8 @@ export const ENV_SHELL_COMMAND = 'DSH_PLUGIN_TERMINAL_SHELL_COMMAND';
 export const ENV_FONT_FAMILY = 'DSH_PLUGIN_TERMINAL_FONT_FAMILY';
 /** 字号环境变量名（ops 级覆盖，优先于 settings 文档） */
 export const ENV_FONT_SIZE = 'DSH_PLUGIN_TERMINAL_FONT_SIZE';
+/** 行高环境变量名（ops 级覆盖，优先于 settings 文档） */
+export const ENV_LINE_HEIGHT = 'DSH_PLUGIN_TERMINAL_LINE_HEIGHT';
 /** 持久化目录环境变量覆盖（测试用） */
 export const ENV_DATA_DIR = 'DSH_PLUGIN_TERMINAL_DATA';
 

@@ -233,7 +233,7 @@ function TerminalPanel(props: TerminalPanelProps): ReactElement {
   });
 
   /* —— 统一配置拉取（/config：快捷键 + 字体 + 终端种类，单次请求） + 全局 keydown 监听 —— */
-  const { shortcutLabel, fontFamily, fontSize, terminalTypes } = useConfig(setOpen);
+  const { shortcutLabel, fontFamily, fontSize, lineHeight, terminalTypes } = useConfig(setOpen);
 
   /** 首次打开已处理标记（关闭最后一个终端不自动新建，只有全新打开才建） */
   const openHandled = useRef(false);
@@ -363,6 +363,7 @@ function TerminalPanel(props: TerminalPanelProps): ReactElement {
                   active: inst.id === activeInstanceId,
                   fontFamily,
                   fontSize,
+                  lineHeight,
                   onExit,
                 });
               }
@@ -384,6 +385,7 @@ function TerminalPanel(props: TerminalPanelProps): ReactElement {
                         active: inst.id === activeInstanceId,
                         fontFamily,
                         fontSize,
+                        lineHeight,
                         onExit,
                       }),
                     ),

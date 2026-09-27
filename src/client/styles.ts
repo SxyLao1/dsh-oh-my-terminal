@@ -8,9 +8,9 @@
  *              保证 SSR / Node 环境安全（typeof document 守卫）。
  */
 
-// 默认字体栈与默认字号与宿主半共享同一常量（constants.ts）——两半不允许互相
-// import，但共享层常量可被双方引用，避免同一数值两处漂移
-import { DEFAULT_FONT_FAMILY, DEFAULT_FONT_SIZE } from '../constants.js';
+// 默认字体栈、默认字号、默认行高与宿主半共享同一常量（constants.ts）——两半
+// 不允许互相 import，但共享层常量可被双方引用，避免同一数值两处漂移
+import { DEFAULT_FONT_FAMILY, DEFAULT_FONT_SIZE, DEFAULT_LINE_HEIGHT } from '../constants.js';
 
 // —— 路由与 DOM 标识常量 ——
 
@@ -31,8 +31,8 @@ export const TERM_FONT_FAMILY = DEFAULT_FONT_FAMILY;
 /** 默认 xterm 字号（像素）——TUI agent 输出密度与可读性的折中；Config.fontSize 缺省时的回落值 */
 export const TERM_FONT_SIZE = DEFAULT_FONT_SIZE;
 
-/** xterm 行高倍数——紧凑但不挤行 */
-export const TERM_LINE_HEIGHT = 1.25;
+/** 默认 xterm 行高倍数——紧凑但不挤行；Config.lineHeight 缺省时的回落值 */
+export const TERM_LINE_HEIGHT = DEFAULT_LINE_HEIGHT;
 
 /** xterm 滚动缓冲行数——agent 会话有大量工具输出，需要较长历史 */
 export const TERM_SCROLLBACK = 10_000;

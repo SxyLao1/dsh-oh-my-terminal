@@ -51,7 +51,7 @@ import {
   PKG_NAME, ROUTE_PREFIX, WS_PREFIX, SCROLLBACK_CHARS,
   DEFAULT_COLS, DEFAULT_ROWS,
   DEFAULT_TOGGLE_SHORTCUT, ENV_TOGGLE_SHORTCUT, ENV_SHELL_COMMAND, ENV_DATA_DIR,
-  DEFAULT_FONT_SIZE, ENV_FONT_FAMILY, ENV_FONT_SIZE,
+  DEFAULT_FONT_SIZE, DEFAULT_LINE_HEIGHT, ENV_FONT_FAMILY, ENV_FONT_SIZE, ENV_LINE_HEIGHT,
 } from './constants.js';
 import { platform } from './platform.js';
 import { SessionStore } from './persistence.js';
@@ -139,6 +139,8 @@ export interface Config {
   fontFamily: Volatile<string | undefined>;
   /** 终端字号（像素） */
   fontSize: Volatile<number | undefined>;
+  /** 终端行高倍数 */
+  lineHeight: Volatile<number | undefined>;
 }
 
 /**
@@ -158,12 +160,16 @@ export const Config = z.object({
     .default('')
     .volatile(),
   fontFamily: z.string()
-    .description('终端字体族（CSS font-family 串），如 ‘Maple Mono NF CN’, Consolas, monospace。留空使用内置默认字体栈（含 CJK 回退）；Nerd Font / Powerline 用户把本机字体填在最前即可正常显示图标字形。仅应用于新建会话及其重启')
+    .description('终端字体族（CSS font-family 串），如 \'Maple Mono NF CN\', Consolas, monospace。必须用直引号（\' 或 " ）包裹含空格的字体名，中文引号会被 CSS 当作字体名一部分导致永不匹配。留空使用内置默认字体栈（含 CJK 回退）；Nerd Font / Powerline 用户把本机字体填在最前即可正常显示图标字形。配置变更即时生效，已打开的终端自动更新')
     .default('')
     .volatile(),
   fontSize: z.number()
-    .description('终端字号（像素）。默认 12.5。仅应用于新建会话及其重启')
+    .description('终端字号（像素）。默认 12.5。配置变更即时生效，已打开的终端自动更新')
     .default(DEFAULT_FONT_SIZE)
+    .volatile(),
+  lineHeight: z.number()
+    .description('终端行高倍数。默认 1.25（紧凑但不挤行）。配置变更即时生效，已打开的终端自动更新')
+    .default(DEFAULT_LINE_HEIGHT)
     .volatile(),
 });
 
@@ -228,6 +234,16 @@ export function apply(ctx: Context, config: Config): void {
       }
       const value = config.fontSize.get();
       return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : DEFAULT_FONT_SIZE;
+    },
+    /** 终端行高倍数——env/配置都要求正有限数，非法值回落默认 */
+    get lineHeight(): number {
+      const env = process.env[ENV_LINE_HEIGHT];
+      if (env !== undefined) {
+        const parsed = Number.parseFloat(env);
+        if (Number.isFinite(parsed) && parsed > 0) return parsed;
+      }
+      const value = config.lineHeight.get();
+      return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : DEFAULT_LINE_HEIGHT;
     },
   };
 
