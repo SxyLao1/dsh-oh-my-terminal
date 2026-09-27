@@ -9,18 +9,23 @@
 
 // —— 终端配置项值 ——
 
-/** 终端配置项值——与宿主半 Config 接口对齐 */
+/**
+ * 终端配置项值——与宿主半 Config 接口对齐。
+ *
+ * terminalProfiles 在宿主半的 schema 里是 JSON 字符串（schemastery 对对象数组
+ * 的 round-trip 不保证），此处仍按字符串承载，由表格组件负责序列化/反序列化。
+ */
 export interface TerminalSettingsValues {
   /** 切换快捷键（如 "ctrl+`"） */
   toggleShortcut: string;
-  /** Shell 命令（如 "pwsh.exe"、"bash"） */
-  shellCommand: string;
   /** 终端字体族（CSS font-family 串） */
   fontFamily: string;
   /** 终端字号（像素） */
   fontSize: number;
   /** 终端行高倍数 */
   lineHeight: number;
+  /** 终端配置表（JSON 字符串，序列化的 TerminalProfile[]） */
+  terminalProfiles: string;
 }
 
 // —— Settings Bridge 配置描述符 ——
