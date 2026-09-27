@@ -27,6 +27,20 @@ import { createLogger } from '../../logger.js';
 
 const log = createLogger('settings-table');
 
+// —— 表格列宽定义 ——
+
+/**
+ * 表格列模板（grid-template-columns 值）。
+ *
+ * 路径列用固定宽度（300px）而非 1fr——长路径不会撑开布局把旁边列挤歪，
+ * 超出部分在列内水平滚动。类型/名称/来源/操作列也固定宽度，保证各列
+ * 比例稳定不受内容长度影响。
+ */
+const GRID_COLS = '140px 1fr 300px 80px 100px';
+
+/** 路径列固定宽度（像素），与 GRID_COLS 中路径列一致 */
+const PATH_COL_WIDTH = 300;
+
 // —— Props 类型 ——
 
 /** ProfileTable 组件的 props */
@@ -170,7 +184,7 @@ export function ProfileTable(props: ProfileTableProps): ReactElement {
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: '140px 1fr 1fr 80px 100px',
+            gridTemplateColumns: GRID_COLS,
             gap: '12px',
             padding: '10px 12px',
             background: 'var(--dsw-alias-interactive-bg-hover)',
@@ -319,7 +333,7 @@ function ProfileRow(props: ProfileRowProps): ReactElement {
     <div
       style={{
         display: 'grid',
-        gridTemplateColumns: '140px 1fr 1fr 80px 100px',
+        gridTemplateColumns: GRID_COLS,
         gap: '12px',
         padding: '10px 12px',
         borderBottom: '1px solid var(--dsw-alias-border-l1)',
@@ -376,8 +390,10 @@ function ProfileRow(props: ProfileRowProps): ReactElement {
         )}
       </div>
 
-      {/* 路径列（origin=auto 只读，origin=user 可编辑） */}
-      <div>
+      {/* 路径列（origin=auto 只读，origin=user 可编辑）
+          固定宽度 + overflow:hidden 防止长路径撑开布局；显示态用
+          overflow-x:auto 让长路径可水平滚动而不挤歪旁边的列 */}
+      <div style={{ maxWidth: PATH_COL_WIDTH + 'px', overflow: 'hidden' }}>
         {canEditPath && editingPath ? (
           <input
             type="text"
@@ -416,8 +432,8 @@ function ProfileRow(props: ProfileRowProps): ReactElement {
                 : 'var(--dsw-alias-label-tertiary)',
               fontFamily: 'monospace',
               fontSize: '12px',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
+              /* 水平滚动：长路径不换行，超出部分可拖动滚动条查看 */
+              overflowX: 'auto',
               whiteSpace: 'nowrap',
             }}
             title={canEditPath ? '点击编辑' : '自动探测的路径不可修改'}
@@ -517,7 +533,7 @@ function AddProfileForm(props: AddProfileFormProps): ReactElement {
     <div
       style={{
         display: 'grid',
-        gridTemplateColumns: '140px 1fr 1fr 80px 100px',
+        gridTemplateColumns: GRID_COLS,
         gap: '12px',
         padding: '10px 12px',
         borderBottom: '1px solid var(--dsw-alias-border-l1)',

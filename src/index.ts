@@ -521,7 +521,9 @@ export function apply(ctx: Context, config: Config): void {
   });
 
   // —— settings 集成（可选，软探测）——
-  registerSettingsIntegration(ctx);
+  // 传入 cachedProfiles：让 describe 端点返回运行时合并探测结果后的完整配置表，
+  // 而非配置系统持久化值（可能是空串），设置页面才能看到自动探测到的终端项
+  registerSettingsIntegration(ctx, cachedProfiles);
 
   // —— 插件销毁清理 ——
   ctx.effect(() => {
