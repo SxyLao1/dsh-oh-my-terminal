@@ -19,12 +19,17 @@
  *   否则用状态码兜底，保证 message 始终是中文可读文案
  */
 
-import type { SettingsDescriptor, JsonPatchOp, SaveResult } from './types.js';
+import type {
+  SettingsDescriptor, JsonPatchOp, SaveResult, TerminalKindOption,
+} from './types.js';
 
 // —— 常量 ——
 
 /** Settings Bridge 端点基础路径（与宿主半路由注册同源） */
 export const BRIDGE_BASE = '/api/dsh-oh-my-terminal/settings';
+
+/** 插件主路由基础路径（非 settings 类端点在此之下） */
+export const PLUGIN_BASE = '/api/dsh-oh-my-terminal';
 
 // —— 内部辅助 ——
 
@@ -152,4 +157,34 @@ export async function saveSettings(
   } catch (error: unknown) {
     return networkFailure(error);
   }
+}
+
+/**
+ * 拉取终端类型列表（供配置表格下拉菜单使用）。
+ *
+ * 对应 GET `${PLUGIN_BASE}/terminal-kinds`。该端点返回所有支持的终端类型及其
+ * 显示标签，前端据此渲染新增配置时的类型选择器。
+ *
+ * @returns 终端类型选项数组
+ * @throws Error 网络失败或宿主半返回非 2xx 状态时抛出，消息为中文可读文案
+ */
+export async function fetchTerminalKinds(): Promise<TerminalKindOption[]> {
+  const res = await fetch(PLUGIN_BASE + '/terminal-kinds', {
+    method: 'GET',
+    credentials: 'same-origin',
+    headers: { accept: 'application/json' },
+  });
+
+  if (!res.ok) {
+    const body = await readJson(res);
+    const { message } = normalizeError(body, res.status);
+    throw new Error(message);
+  }
+
+  const body = await res.json();
+  // 宿主返回 { kinds: TerminalKindOption[] }
+  if (body && typeof body === 'object' && Array.isArray(body.kinds)) {
+    return body.kinds as TerminalKindOption[];
+  }
+  throw new Error('终端类型列表返回了无法识别的响应格式');
 }

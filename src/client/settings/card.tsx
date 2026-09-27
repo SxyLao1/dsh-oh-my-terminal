@@ -16,7 +16,7 @@
 
 import * as React from 'react';
 import type { ReactElement } from 'react';
-import type { TerminalSettingsValues } from './types.js';
+import type { TerminalSettingsValues, TerminalProfile } from './types.js';
 import { fetchSettings, saveSettings } from './api.js';
 import {
   formReducer,
@@ -24,6 +24,7 @@ import {
   buildOpsFromDirty,
   type FormState,
 } from './store.js';
+import { ProfileTable } from './profile-table.js';
 
 // —— Props 类型 ——
 
@@ -82,6 +83,25 @@ export function TerminalSettingsCard(props: TerminalSettingsCardProps): ReactEle
 
   /* page 视图：完整表单 */
   return <SettingsForm state={state} dispatch={dispatch} />;
+}
+
+// —— 工具函数 ——
+
+/**
+ * 解析 terminalProfiles JSON 字符串为数组。
+ *
+ * @param json - JSON 字符串
+ * @returns 配置数组；空串或非法 JSON 返回空数组
+ */
+function parseProfiles(json: string): TerminalProfile[] {
+  if (json === '') return [];
+  try {
+    const parsed = JSON.parse(json);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    /* 非法 JSON（配置被外部改坏）——降级为空表，不阻塞其余字段编辑 */
+    return [];
+  }
 }
 
 // —— 内部子组件 ——
@@ -225,6 +245,28 @@ function SettingsForm(props: SettingsFormProps): ReactElement {
             placeholder="1.2"
             step="0.1"
           />
+
+          {/* 终端配置表 */}
+          <div style={{ marginTop: '24px' }}>
+            <label
+              style={{
+                fontSize: '13px',
+                fontWeight: 500,
+                color: 'var(--dsw-alias-label-primary)',
+                display: 'block',
+                marginBottom: '12px',
+              }}
+            >
+              终端配置表
+            </label>
+            <ProfileTable
+              profiles={parseProfiles(values.terminalProfiles)}
+              disabled={!writable || isBusy}
+              onChange={(newProfiles) => {
+                handleEdit('terminalProfiles', JSON.stringify(newProfiles));
+              }}
+            />
+          </div>
 
           {/* 操作按钮 */}
           <div style={{ display: 'flex', gap: '10px', marginTop: '8px' }}>

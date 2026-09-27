@@ -37,8 +37,13 @@ export { createSettingsBridgeRoutes } from './bridge.js';
  * 逐一调用清理。
  *
  * @param ctx - cordis 上下文（插件主入口的 apply 参数）
+ * @param runtimeProfiles - 运行时终端配置表（探测+合并后的完整数组），传给 bridge
+ *   供 describe 端点覆盖持久化的 terminalProfiles 值
  */
-export function registerSettingsIntegration(ctx: Context): void {
+export function registerSettingsIntegration(
+  ctx: Context,
+  runtimeProfiles?: unknown[],
+): void {
   // 1. 配置 settings 服务为非自动模式——软探测，服务不存在时不激活
   ctx.inject(['settings'], (sctx) => {
     // settings.configure({ auto: false }, fiber) 关闭自动模式：
@@ -54,7 +59,7 @@ export function registerSettingsIntegration(ctx: Context): void {
   ctx.inject(['webServer', 'settings'], (sctx) => {
     sctx.effect(() => {
       // 从 bridge.ts 工厂创建两个路由配置对象
-      const routes = createSettingsBridgeRoutes(sctx.settings, SETTINGS_NS);
+      const routes = createSettingsBridgeRoutes(sctx.settings, SETTINGS_NS, runtimeProfiles);
 
       // 逐个注册路由，webServer.register() 返回 disposer 函数
       const disposers = routes.map((routeConfig) => sctx.webServer.register(routeConfig));

@@ -7,6 +7,44 @@
  *              本文件只包含纯类型定义，不含任何运行时逻辑、常量或函数。
  */
 
+// —— 终端种类 ——
+
+/** 终端种类（与宿主半 terminal/kinds.ts 对齐） */
+export type TerminalKind =
+  | 'pwsh'
+  | 'powershell'
+  | 'cmd'
+  | 'bash'
+  | 'zsh'
+  | 'fish'
+  | 'gitbash'
+  | 'nushell'
+  | 'custom';
+
+/** 终端类型选项（供下拉菜单使用） */
+export interface TerminalKindOption {
+  /** 种类 id */
+  kind: TerminalKind;
+  /** 显示标签 */
+  label: string;
+}
+
+// —— 终端配置项 ——
+
+/** 终端配置项（与宿主半 terminal/detect.ts 的 TerminalProfile 对齐） */
+export interface TerminalProfile {
+  /** 稳定标识（UUID，生成后不变） */
+  id: string;
+  /** 终端类型 */
+  type: TerminalKind;
+  /** 显示名（用户可改） */
+  name: string;
+  /** 可执行文件路径（留空 = 按 type 自动解析） */
+  path: string;
+  /** 来源：auto（启动探测）/ user（手动新增） */
+  origin: 'auto' | 'user';
+}
+
 // —— 终端配置项值 ——
 
 /**

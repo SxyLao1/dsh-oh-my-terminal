@@ -157,13 +157,21 @@ async function readBody(req: IncomingMessage): Promise<Record<string, unknown>> 
  * 捕获 `SettingsConflictError`（乐观锁冲突），返回 `{ ok: false, code:
  * 'settings-conflict' }`，由前端重新拉取配置后重试。
  *
+ * terminalProfiles 字段的特殊处理：
+ * 配置系统持久化值可能是空串（首次安装尚未写回探测结果），而运行时
+ * {@link module:index} 已合并探测结果得到完整的 TerminalProfile[]。
+ * describe 端点用 runtimeProfiles（序列化为 JSON 字符串）覆盖持久化值，
+ * 让设置页面看到与终端面板一致的数据。
+ *
  * @param settings - settings 服务实例（兼容 {@link SettingsLike} 接口）
  * @param namespace - 命名空间（profile 条目 id，如 'terminal-panel'）
+ * @param runtimeProfiles - 运行时终端配置表（探测+合并后的完整数组）
  * @returns 两个路由配置对象数组（供 webServer.register() 注册）
  */
 export function createSettingsBridgeRoutes(
   settings: SettingsLike,
   namespace: string,
+  runtimeProfiles?: unknown[],
 ): RouteConfig[] {
   return [
     // GET ${ROUTE_PREFIX}${BRIDGE_PREFIX}/describe — 返回插件配置快照
@@ -199,12 +207,21 @@ export function createSettingsBridgeRoutes(
 
           // 返回插件配置快照：namespace/revision/value/writable
           // descriptor.value 是配置对象（Record<string, unknown>）
+          // terminalProfiles 字段用运行时合并探测结果后的完整数组覆盖持久化值——
+          // 配置系统持久化值可能是空串（首次安装尚未写回），而运行时已有探测结果
+          const configValue = descriptor.value as Record<string, unknown> | null;
+          const value = (configValue !== null && typeof configValue === 'object')
+            ? { ...configValue }
+            : {};
+          if (runtimeProfiles !== undefined) {
+            value.terminalProfiles = JSON.stringify(runtimeProfiles);
+          }
           json(res, 200, {
             ok: true,
             value: {
               namespace: descriptor.ns,
               revision: descriptor.revision,
-              value: descriptor.value,
+              value,
               writable: settings.writable,
             },
           });

@@ -15,6 +15,7 @@ export type { TerminalKind } from './kinds.js';
 export {
   KIND_SPECS,
   getKindSpec,
+  getKindOptions,
   isDetectableOnPlatform,
   getBinaryName,
   getInteractiveArgs,
