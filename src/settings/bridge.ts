@@ -18,6 +18,7 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { SettingsConflictError } from '@deepseek-ai/dsh-settings';
+import { ROUTE_PREFIX } from '../constants.js';
 import { BRIDGE_PREFIX } from './namespace.js';
 import type { JsonPatchOp } from './patch.js';
 
@@ -149,8 +150,8 @@ async function readBody(req: IncomingMessage): Promise<Record<string, unknown>> 
  * 创建 settings bridge 路由配置
  *
  * 工厂函数——接收 settings 服务实例与命名空间，返回两个路由配置对象数组：
- * 1. GET  ${BRIDGE_PREFIX}/describe → 返回插件配置快照
- * 2. POST ${BRIDGE_PREFIX}/mutate   → 原子提交配置变更
+ * 1. GET  ${ROUTE_PREFIX}${BRIDGE_PREFIX}/describe → 返回插件配置快照
+ * 2. POST ${ROUTE_PREFIX}${BRIDGE_PREFIX}/mutate   → 原子提交配置变更
  *
  * 两个路由都经同源检查（{@link sameOrigin}），跨源请求直接 403。mutate 路由
  * 捕获 `SettingsConflictError`（乐观锁冲突），返回 `{ ok: false, code:
@@ -165,10 +166,10 @@ export function createSettingsBridgeRoutes(
   namespace: string,
 ): RouteConfig[] {
   return [
-    // GET /settings/describe — 返回插件配置快照
+    // GET ${ROUTE_PREFIX}${BRIDGE_PREFIX}/describe — 返回插件配置快照
     {
       kind: 'exact',
-      path: `${BRIDGE_PREFIX}/describe`,
+      path: `${ROUTE_PREFIX}${BRIDGE_PREFIX}/describe`,
       handler: async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
         // 同源检查——跨源请求直接拒绝
         if (!sameOrigin(req)) {
@@ -196,14 +197,14 @@ export function createSettingsBridgeRoutes(
             return;
           }
 
-          // 返回插件配置快照：namespace/revision/config/writable
+          // 返回插件配置快照：namespace/revision/value/writable
           // descriptor.value 是配置对象（Record<string, unknown>）
           json(res, 200, {
             ok: true,
             value: {
               namespace: descriptor.ns,
               revision: descriptor.revision,
-              config: descriptor.value,
+              value: descriptor.value,
               writable: settings.writable,
             },
           });
@@ -214,10 +215,10 @@ export function createSettingsBridgeRoutes(
       },
     },
 
-    // POST /settings/mutate — 原子提交配置变更
+    // POST ${ROUTE_PREFIX}${BRIDGE_PREFIX}/mutate — 原子提交配置变更
     {
       kind: 'exact',
-      path: `${BRIDGE_PREFIX}/mutate`,
+      path: `${ROUTE_PREFIX}${BRIDGE_PREFIX}/mutate`,
       handler: async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
         // 同源检查——跨源请求直接拒绝
         if (!sameOrigin(req)) {
@@ -274,8 +275,29 @@ export function createSettingsBridgeRoutes(
           // 调用 settings.mutate() 原子提交——乐观锁冲突时抛 SettingsConflictError
           await settings.mutate(ns, ops as JsonPatchOp[], expectedRevision);
 
-          // 提交成功
-          json(res, 200, { ok: true });
+          // 回读提交后的最新快照并返回——客户端 SAVE_SUCCESS 需要完整的
+          // descriptor 来刷新表单值与 revision（只回 { ok: true } 会让客户端
+          // 拿不到新 revision，下次保存必然撞乐观锁）
+          const fresh = settings.describe({ redactSecrets: false }).find((d) => d.ns === namespace);
+          if (fresh === undefined) {
+            json(res, 500, {
+              ok: false,
+              code: 'internal-error',
+              message: `提交成功但命名空间 ${namespace} 已不存在`,
+            });
+            return;
+          }
+
+          // 提交成功——返回与 describe 端点同形状的描述符
+          json(res, 200, {
+            ok: true,
+            value: {
+              namespace: fresh.ns,
+              revision: fresh.revision,
+              value: fresh.value,
+              writable: settings.writable,
+            },
+          });
         } catch (error) {
           // 捕获 SettingsConflictError——乐观锁冲突，返回 409 Conflict
           // error.name === 'SettingsConflictError' 是官方错误类的标识符

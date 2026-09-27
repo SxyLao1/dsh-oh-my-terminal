@@ -97,6 +97,8 @@ export const ENV_FONT_FAMILY = 'DSH_PLUGIN_TERMINAL_FONT_FAMILY';
 export const ENV_FONT_SIZE = 'DSH_PLUGIN_TERMINAL_FONT_SIZE';
 /** 行高环境变量名（ops 级覆盖，优先于 settings 文档） */
 export const ENV_LINE_HEIGHT = 'DSH_PLUGIN_TERMINAL_LINE_HEIGHT';
+/** 终端配置表环境变量名（ops 级覆盖，优先于 settings 文档；JSON 字符串） */
+export const ENV_TERMINAL_PROFILES = 'DSH_PLUGIN_TERMINAL_PROFILES';
 /** 持久化目录环境变量覆盖（测试用） */
 export const ENV_DATA_DIR = 'DSH_PLUGIN_TERMINAL_DATA';
 

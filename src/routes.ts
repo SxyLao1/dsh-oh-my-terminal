@@ -27,6 +27,8 @@ import {
 import { platform } from './platform.js';
 import type { SessionStore } from './persistence.js';
 import type { SessionRecord } from './persistence.js';
+import type { TerminalProfile } from './terminal/index.js';
+import { resolveProfile } from './terminal/index.js';
 
 const log = createLogger('terminal-host');
 
@@ -40,10 +42,14 @@ export interface CreateSessionOptions {
   rows?: number;
   /** 工作目录 */
   cwd?: string;
-  /** 裸 shell 文件覆盖 */
-  shell?: string;
-  /** 完整命令行覆盖 */
-  cmdline?: string;
+  /**
+   * 终端配置表 id（/config 下发的 terminalProfiles 中的 id）。
+   *
+   * 客户端只传 id、不传路径与参数：配置表归宿主半（terminal/ 模块），
+   * 前端复制一份既会漂移，也拿不到 PATH 解析结果。宿主半在此按 id 查表取出
+   * profile，再解析为 spawn 参数——带空格的路径、`-l` 参数都能正确处理。
+   */
+  profileId?: string;
   /** restart 继承的滚动缓冲 seed */
   seed?: string;
   /** 所属 DSH 会话 id（用于 workspaceRegistry 查工作区路径） */
@@ -189,40 +195,36 @@ function resolveSessionCwd(
 }
 
 /**
- * 解析 spawn 参数：从 shell/cmdline/settings 解析出 (file, args, cmdline)。
+ * 解析 spawn 参数：按终端配置表 id 查出 profile，解析为 (file, args, cmdline)。
  *
- * 来源优先级（高到低）：
- * 1. shell——裸 shell 文件，per-request 覆盖（legacy API）
- * 2. cmdline——完整命令行（restart 重跑原命令）
- * 3. runtimeSettings.shellCommand——用户配置的命令行
- * 4. 平台默认（经 platform.detectDefaultShell()）
+ * 只认 profileId——旧的 shell/cmdline/shellCommand 回退链已随 type/name/path
+ * 模型落地一并删除，避免两套终端选择机制并存造成语义歧义。
  *
- * 完整命令行原样使用（不注入平台特定标志）；裸 shell 文件经平台适配器构建参数。
+ * 解析失败（id 不存在 / PATH 中找不到 path 留空的种类）时回落到平台默认 shell：
+ * 让终端仍能打开，而不是抛错让用户面对一个空白面板。
  *
- * @param shell - 裸 shell 文件覆盖
- * @param cmdline - 完整命令行覆盖
- * @param runtimeShellCommand - settings 配置的命令行
+ * @param profileId - 终端配置表 id
+ * @param profiles - 终端配置表
  * @returns spawn 参数 + 生效命令行
  */
 function resolveSpawn(
-  shell: string | undefined,
-  cmdline: string | undefined,
-  runtimeShellCommand: string,
+  profileId: string | undefined,
+  profiles: readonly TerminalProfile[],
 ): { file: string; args: string[]; cmdline: string | null } {
-  // 裸 shell 文件覆盖——经平台适配器构建参数（POSIX 加 -i，Windows 不加）
-  const bare = firstNonEmpty(shell) ?? null;
-  if (bare !== null) {
-    const { file, args } = platform.buildBareSpawnArgs(bare);
-    return { file, args, cmdline: null };
+  const wanted = firstNonEmpty(profileId) ?? null;
+  if (wanted !== null) {
+    const profile = profiles.find(p => p.id === wanted);
+    if (profile !== undefined) {
+      const spawnArgs = resolveProfile(profile);
+      if (spawnArgs !== null) {
+        return { file: spawnArgs.file, args: spawnArgs.args, cmdline: profile.path || null };
+      }
+      log.warn(`终端配置 ${wanted}（${profile.name}）无法解析为可执行文件，回落到平台默认 shell`);
+    } else {
+      log.warn(`终端配置 id ${wanted} 不存在，回落到平台默认 shell`);
+    }
   }
-  // 完整命令行（per-request 覆盖 > settings 配置）——原样拆分，不注入平台标志
-  const full = firstNonEmpty(cmdline, runtimeShellCommand) ?? null;
-  if (full !== null) {
-    const parts = splitCommandLine(full);
-    const file = parts[0] ?? platform.detectDefaultShell();
-    return { file, args: parts.slice(1), cmdline: full };
-  }
-  // 平台默认——经平台适配器构建参数
+  // 回落：平台默认 shell
   const file = platform.detectDefaultShell();
   const { args } = platform.buildBareSpawnArgs(file);
   return { file, args, cmdline: null };
@@ -275,7 +277,9 @@ export interface RouteHandlerDeps {
   /** 持久化存储 */
   store: SessionStore;
   /** 运行时配置（快捷键 + shell 命令行 + 字体） */
-  runtimeSettings: { toggleShortcut: string; shellCommand: string; fontFamily: string; fontSize: number; lineHeight: number };
+  runtimeSettings: { toggleShortcut: string; fontFamily: string; fontSize: number; lineHeight: number };
+  /** 终端配置表（type/name/path 三元组） */
+  profiles: readonly TerminalProfile[];
   /** 可选的 DSH 工作区注册表 */
   workspaceRegistry: unknown;
   /** 创建新会话 */
@@ -304,7 +308,7 @@ export function createRouteHandler(
   deps: RouteHandlerDeps,
 ): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   const {
-    sessions, store, runtimeSettings, workspaceRegistry,
+    sessions, store, runtimeSettings, profiles, workspaceRegistry,
     createSession, killSession, restartSession, upgradeDisposers,
   } = deps;
 
@@ -347,23 +351,21 @@ export function createRouteHandler(
           cols: clampInt(body.cols, COLS_MIN, COLS_MAX, DEFAULT_COLS),
           rows: clampInt(body.rows, ROWS_MIN, ROWS_MAX, DEFAULT_ROWS),
           cwd: typeof body.cwd === 'string' ? body.cwd : undefined,
-          shell: typeof body.shell === 'string' ? body.shell : undefined,
-          cmdline: typeof body.cmdline === 'string' ? body.cmdline : undefined,
+          profileId: typeof body.profileId === 'string' ? body.profileId : undefined,
           sessionId: typeof body.sessionId === 'string' ? body.sessionId : undefined,
         });
         json(res, 200, { id: record.id, title: record.title, shell: record.shell, cwd: record.cwd });
         return;
       }
 
-      // GET /config — 插件配置（含终端种类列表）
+      // GET /config — 插件配置（含终端配置表）
       if (rest === '/config' && method === 'GET') {
         json(res, 200, {
           toggleShortcut: runtimeSettings.toggleShortcut,
-          shellCommand: runtimeSettings.shellCommand,
           fontFamily: runtimeSettings.fontFamily,
           fontSize: runtimeSettings.fontSize,
           lineHeight: runtimeSettings.lineHeight,
-          terminalTypes: platform.builtinTerminalTypes,
+          terminalProfiles: profiles,
           protocolVersion: PROTOCOL_VERSION,
         });
         return;

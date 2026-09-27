@@ -52,6 +52,7 @@ import {
   DEFAULT_COLS, DEFAULT_ROWS,
   DEFAULT_TOGGLE_SHORTCUT, ENV_TOGGLE_SHORTCUT, ENV_SHELL_COMMAND, ENV_DATA_DIR,
   DEFAULT_FONT_SIZE, DEFAULT_LINE_HEIGHT, ENV_FONT_FAMILY, ENV_FONT_SIZE, ENV_LINE_HEIGHT,
+  ENV_TERMINAL_PROFILES,
 } from './constants.js';
 import { platform } from './platform.js';
 import { SessionStore } from './persistence.js';
@@ -61,6 +62,8 @@ import { createRouteHandler } from './routes.js';
 import type { CreateSessionOptions } from './routes.js';
 import { makeId, getSessionCounter, resolveSpawn, resolveSessionCwd } from './routes.js';
 import { registerSettingsIntegration } from './settings/index.js';
+import type { TerminalProfile } from './terminal/index.js';
+import { detectTerminalProfiles, mergeProfiles } from './terminal/index.js';
 
 const log = createLogger('terminal-host');
 
@@ -134,14 +137,20 @@ async function loadPty(): Promise<PtyModule> {
 export interface Config {
   /** 展开/收起面板的快捷键（裸监听降级路径；rc.2+ 宿主由 shortcuts 系统接管） */
   toggleShortcut: Volatile<string | undefined>;
-  /** 新终端的 shell 命令行；空 = 自动探测平台 shell */
-  shellCommand: Volatile<string | undefined>;
   /** 终端字体族（CSS font-family 串）；空 = 内置默认字体栈 */
   fontFamily: Volatile<string | undefined>;
   /** 终端字号（像素） */
   fontSize: Volatile<number | undefined>;
   /** 终端行高倍数 */
   lineHeight: Volatile<number | undefined>;
+  /**
+   * 终端配置表（JSON 字符串，序列化的 TerminalProfile[]）。
+   *
+   * 空串 = 用启动时探测到的 $PATH 终端；非空 = 以配置表为准（探测结果已合并进来）。
+   * 用字符串而非嵌套数组：schemastery 对对象数组的 round-trip 行为不保证，
+   * 且配置文件里出现嵌套数组会让 patch 层难以表达。
+   */
+  terminalProfiles: Volatile<string | undefined>;
 }
 
 /**
@@ -156,10 +165,6 @@ export const Config = z.object({
     .description('展开/收起终端面板的快捷键。格式：修饰键+键，如 ctrl+` 或 ctrl+j（修饰键：ctrl, shift, alt, meta；键：字母、数字、F1-F12 或命名键如 `、space、enter）。注意：DSH 0.1.7-rc.2 起宿主自带快捷键系统，此处的快捷键仅在旧宿主（无 shortcuts 服务）上生效；新宿主上请在 DSH 设置界面的快捷键页统一配置 terminal-panel.toggle（默认 Ctrl+Shift+`，因为 Ctrl+` 已被自带终端占用）')
     .default(DEFAULT_TOGGLE_SHORTCUT)
     .volatile(),
-  shellCommand: z.string()
-    .description('新建终端使用的 shell 命令行，如 bash -l。留空自动探测平台 shell（$SHELL || /bin/bash）。仅应用于新建会话及其重启；已有会话保留其启动命令')
-    .default('')
-    .volatile(),
   fontFamily: z.string()
     .description('终端字体族（CSS font-family 串），如 \'Maple Mono NF CN\', Consolas, monospace。必须用直引号（\' 或 " ）包裹含空格的字体名，中文引号会被 CSS 当作字体名一部分导致永不匹配。留空使用内置默认字体栈（含 CJK 回退）；Nerd Font / Powerline 用户把本机字体填在最前即可正常显示图标字形。配置变更即时生效，已打开的终端自动更新')
     .default('')
@@ -171,6 +176,10 @@ export const Config = z.object({
   lineHeight: z.number()
     .description('终端行高倍数。默认 1.25（紧凑但不挤行）。配置变更即时生效，已打开的终端自动更新')
     .default(DEFAULT_LINE_HEIGHT)
+    .volatile(),
+  terminalProfiles: z.string()
+    .description('终端配置表（JSON 数组）。每项形如 {"id":"t-pwsh-ab12","type":"pwsh","name":"PowerShell 7","path":"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe","origin":"auto"}。type 决定 spawn 语义（pwsh/powershell/cmd/bash/zsh/fish/gitbash/nushell/custom），name 是下拉菜单显示名，path 留空则按 type 在 $PATH 中解析。留空整表（默认）表示用启动时探测到的 $PATH 终端。自动探测项（origin=auto）不可删除、路径不可改，但可改名')
+    .default('')
     .volatile(),
 });
 
@@ -212,13 +221,6 @@ export function apply(ctx: Context, config: Config): void {
       const value = config.toggleShortcut.get();
       return typeof value === 'string' && value.length > 0 ? value : DEFAULT_TOGGLE_SHORTCUT;
     },
-    /** 新终端的 shell 命令行（空 = 自动探测） */
-    get shellCommand(): string {
-      const env = process.env[ENV_SHELL_COMMAND];
-      if (env !== undefined) return env;
-      const value = config.shellCommand.get();
-      return typeof value === 'string' ? value : '';
-    },
     /** 终端字体族（空串 = 前端用内置默认字体栈） */
     get fontFamily(): string {
       const env = process.env[ENV_FONT_FAMILY];
@@ -246,7 +248,88 @@ export function apply(ctx: Context, config: Config): void {
       const value = config.lineHeight.get();
       return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : DEFAULT_LINE_HEIGHT;
     },
+    /**
+     * 终端配置表（已合并探测结果的完整列表）。
+     *
+     * 启动时由 prepareProfiles() 求值一次并缓存——探测涉及多次 where/which
+     * 子进程调用，不适合每次 /config 请求都重跑。配置热更新时由
+     * rebuildProfiles() 重建。
+     */
+    get profiles(): readonly TerminalProfile[] {
+      return cachedProfiles;
+    },
   };
+
+  /**
+   * 解析配置项字符串为 TerminalProfile[]；解析失败返回空数组。
+   *
+   * @param raw - 配置项原始值（JSON 字符串）
+   * @returns 解析后的配置表
+   */
+  function parseProfiles(raw: string | undefined): TerminalProfile[] {
+    if (typeof raw !== 'string' || raw.length === 0) return [];
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      return Array.isArray(parsed) ? (parsed as TerminalProfile[]) : [];
+    } catch {
+      /* 配置被手改坏——按空表处理，下次探测会重新填充 */
+      return [];
+    }
+  }
+
+  /**
+   * 计算配置表：env 覆盖 > 已保存配置（合并探测结果）> 纯探测结果。
+   *
+   * 合并语义：已保存的项全部保留（用户改的 name 不丢），探测到的新 type/path
+   * 补进去。这样用户装了新终端后重启即可在下拉菜单看到，同时不影响既有改名。
+   *
+   * @returns 生效的终端配置表
+   */
+  function computeProfiles(): TerminalProfile[] {
+    const envRaw = process.env[ENV_TERMINAL_PROFILES];
+    if (typeof envRaw === 'string' && envRaw.length > 0) {
+      const fromEnv = parseProfiles(envRaw);
+      if (fromEnv.length > 0) return fromEnv;
+    }
+    const saved = parseProfiles(config.terminalProfiles.get());
+    const detected = detectTerminalProfiles();
+    return mergeProfiles(saved, detected);
+  }
+
+  /**
+   * 启动时求值一次配置表并缓存。
+   *
+   * 若配置项为空（首次安装），把探测结果写回配置——这样用户对自动探测项改的
+   * 名字能跨重启保留，且下次启动不必再全量探测。
+   *
+   * 写入走 settings 服务的 update(ns, patch)：Volatile 引用是只读视图，没有
+   * setter。settings 服务在 apply 时未必就绪，所以用 ctx.inject 子级延迟注册；
+   * 写失败（只读 profile / 无 settings 服务）只记警告，不阻断插件启动。
+   */
+  function prepareProfiles(): TerminalProfile[] {
+    const saved = parseProfiles(config.terminalProfiles.get());
+    const detected = detectTerminalProfiles();
+    const merged = mergeProfiles(saved, detected);
+
+    // 首次运行：把探测结果落盘，后续启动只补增量
+    if (saved.length === 0 && merged.length > 0) {
+      const payload = JSON.stringify(merged);
+      ctx.inject(['settings'], (sctx) => {
+        const settings = sctx.settings as { update?: (ns: string, patch: object) => Promise<void> };
+        if (typeof settings.update !== 'function') return;
+        void settings.update(PKG_NAME.replace(/^dsh-/, ''), { terminalProfiles: payload })
+          .then(() => { log.info(`终端配置表已初始化：探测到 ${merged.length} 个终端`); })
+          .catch((error: unknown) => {
+            const msg = error instanceof Error ? error.message : String(error);
+            log.warn(`终端配置表写入失败，仅本次运行有效：${msg}`);
+          });
+      });
+    }
+    return merged;
+  }
+
+  /** 启动时求值的终端配置表（探测 + 合并结果） */
+  const cachedProfiles: TerminalProfile[] = prepareProfiles();
 
   /** id -> 会话记录 */
   const sessions = new Map<string, SessionRecord>();
@@ -280,7 +363,7 @@ export function apply(ctx: Context, config: Config): void {
     const cols = options.cols ?? DEFAULT_COLS;
     const rows = options.rows ?? DEFAULT_ROWS;
     const { file, args, cmdline: effectiveCmdline } = resolveSpawn(
-      options.shell, options.cmdline, runtimeSettings.shellCommand,
+      options.profileId, cachedProfiles,
     );
     const id = makeId();
     const sessionCwd = resolveSessionCwd(options.cwd, options.sessionId, workspaceRegistry);
@@ -427,6 +510,7 @@ export function apply(ctx: Context, config: Config): void {
       sessions,
       store,
       runtimeSettings,
+      profiles: cachedProfiles,
       workspaceRegistry,
       createSession,
       killSession,
@@ -449,5 +533,5 @@ export function apply(ctx: Context, config: Config): void {
     };
   }, PKG_NAME + '.routes');
 
-  log.info(`宿主半已激活；路由前缀 ${ROUTE_PREFIX}，WS 前缀 ${WS_PREFIX}，快捷键 ${runtimeSettings.toggleShortcut}，shell ${runtimeSettings.shellCommand || '(自动)'}`);
+  log.info(`宿主半已激活；路由前缀 ${ROUTE_PREFIX}，WS 前缀 ${WS_PREFIX}，快捷键 ${runtimeSettings.toggleShortcut}，终端配置 ${cachedProfiles.length} 项`);
 }

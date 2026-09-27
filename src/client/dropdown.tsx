@@ -1,17 +1,17 @@
 /**
  * @file 终端下拉菜单组件
  * @description 浏览器半终端面板 tabs 栏的下拉菜单，位于 + 按钮旁。提供新建终端、
- *              拆分终端、按终端种类新建/拆分等操作入口。通过 props 回调与父组件
+ *              拆分终端、按终端配置新建/拆分等操作入口。通过 props 回调与父组件
  *              （TerminalPanel）通信，自身仅负责菜单渲染与交互状态管理。
  *
  * 依赖模块：
- * - `./types.js` — TerminalType 类型定义
+ * - `./types.js` — TerminalProfile 类型定义
  * - `./icons.js` — Plus12 / ChevronDownSmall10 / Split14 图标组件
  */
 
 import * as React from 'react';
 import type { ReactElement } from 'react';
-import type { TerminalType } from './types.js';
+import type { TerminalProfile } from './types.js';
 import { Plus12, ChevronDownSmall10, Split14 } from './icons.js';
 
 // —— 类型定义 ——
@@ -24,10 +24,10 @@ export interface DropdownMenuProps {
   onNewTerminal: () => void;
   /** 拆分终端回调 */
   onSplitTerminal: () => void;
-  /** 终端种类列表（来自 /config） */
-  terminalTypes: TerminalType[];
-  /** 按种类新建终端 */
-  onNewByType: (typeId: string) => void;
+  /** 终端配置列表（来自 /config） */
+  terminalProfiles: TerminalProfile[];
+  /** 按配置 id 新建终端 */
+  onNewByType: (profileId: string) => void;
 }
 
 // —— 组件实现 ——
@@ -43,7 +43,7 @@ export interface DropdownMenuProps {
  * @returns 下拉菜单根元素
  */
 export function DropdownMenu(props: DropdownMenuProps): ReactElement {
-  const { busy, onNewTerminal, onSplitTerminal, terminalTypes, onNewByType } = props;
+  const { busy, onNewTerminal, onSplitTerminal, terminalProfiles, onNewByType } = props;
   const { useState, useEffect, useRef, useCallback } = React;
 
   /** 菜单是否展开 */
@@ -122,25 +122,23 @@ export function DropdownMenu(props: DropdownMenuProps): ReactElement {
     ),
   );
 
-  /* 终端种类菜单项（仅有种类时显示分隔线与种类列表，每项直接新建对应终端） */
-  if (terminalTypes.length > 0) {
+  /* 终端配置菜单项（有配置时显示分隔线与列表，每项按该配置新建终端） */
+  if (terminalProfiles.length > 0) {
     menuItems.push(
       React.createElement('div', { key: 'sep', className: 'dshTermDropdownSep' }),
     );
 
-    for (const tt of terminalTypes) {
-      /* 跳过 "默认 Shell"——已在上方"新建终端"中覆盖 */
-      if (tt.id === 'default') continue;
+    for (const profile of terminalProfiles) {
       menuItems.push(
         React.createElement(
           'div',
           {
-            key: tt.id,
+            key: profile.id,
             className: 'dshTermDropdownItem',
-            onClick: handleItemClick(() => onNewByType(tt.id)),
+            onClick: handleItemClick(() => onNewByType(profile.id)),
           },
           Plus12(),
-          React.createElement('span', null, tt.label),
+          React.createElement('span', null, profile.name),
         ),
       );
     }

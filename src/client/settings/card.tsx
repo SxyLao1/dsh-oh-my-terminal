@@ -196,15 +196,6 @@ function SettingsForm(props: SettingsFormProps): ReactElement {
             placeholder="ctrl+shift+`"
           />
 
-          {/* Shell 命令 */}
-          <FormField
-            label="Shell 命令"
-            value={values.shellCommand}
-            disabled={!writable || isBusy}
-            onChange={(v) => handleEdit('shellCommand', v)}
-            placeholder="pwsh.exe"
-          />
-
           {/* 字体族 */}
           <FormField
             label="字体族"

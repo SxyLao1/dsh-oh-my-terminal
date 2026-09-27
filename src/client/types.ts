@@ -67,30 +67,37 @@ export interface CreateSessionResponse {
   cwd?: string;
 }
 
-/** 终端种类条目（/config 返回的 terminalTypes 数组元素） */
-export interface TerminalType {
-  /** 种类 id（如 "default"、"bash"、"zsh"） */
+/**
+ * 终端配置项（type/name/path 模型）。
+ *
+ * 字段与宿主半 `src/terminal/detect.ts` 的 TerminalProfile 逐一对齐——两侧
+ * 经 /config 传输同一形状，宿主半是权威定义方。
+ */
+export interface TerminalProfile {
+  /** 配置 id（稳定标识，探测时生成） */
   id: string;
-  /** 显示标签（如 "默认 Shell"、"Bash"） */
-  label: string;
-  /** 启动命令（空串表示用默认 shell） */
-  command: string;
+  /** 终端类型（pwsh/powershell/cmd/bash/zsh/fish/gitbash/nushell/custom） */
+  type: string;
+  /** 显示名（用户可改） */
+  name: string;
+  /** 可执行文件路径（留空则按 type 在 $PATH 中解析） */
+  path: string;
+  /** 来源：auto = 启动时探测，user = 用户手动新增 */
+  origin: 'auto' | 'user';
 }
 
 /** GET /config 响应体 */
 export interface ConfigResponse {
   /** 切换快捷键字符串（如 "ctrl+`"） */
   toggleShortcut?: string;
-  /** 配置的 shell 命令 */
-  shellCommand?: string;
   /** 终端字体族（CSS font-family 串；空串或缺省时用内置默认字体栈） */
   fontFamily?: string;
   /** 终端字号（像素；缺省时用内置默认值） */
   fontSize?: number;
   /** 终端行高倍数；缺省时用内置默认值 */
   lineHeight?: number;
-  /** 可选的终端种类列表 */
-  terminalTypes?: TerminalType[];
+  /** 终端配置表（type/name/path 模型） */
+  terminalProfiles?: TerminalProfile[];
 }
 
 /** 对话区几何信息（面板宽度对齐对话列，不覆盖侧栏） */
