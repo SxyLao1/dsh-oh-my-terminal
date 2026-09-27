@@ -28,10 +28,12 @@ export interface TermPaneProps {
   instance: TerminalInstance;
   /** 是否为当前活跃实例 */
   active: boolean;
-  /** 终端字体族（空串 = 内置默认字体栈）；经 Config 下发，xterm 为 init-only 故只在构造时取值 */
+  /** 终端字体族（空串 = 内置默认字体栈）；经 Config 下发，支持运行期热更新 */
   fontFamily: string;
-  /** 终端字号（像素）；undefined = 用内置默认值 */
+  /** 终端字号（像素）；undefined = 用内置默认值；支持运行期热更新 */
   fontSize: number | undefined;
+  /** 终端行高倍数；undefined = 用内置默认值；支持运行期热更新 */
+  lineHeight: number | undefined;
   /** 会话退出回调（标记实例为 exited） */
   onExit: (id: string) => void;
 }
@@ -47,7 +49,7 @@ export interface TermPaneProps {
  * @returns 终端容器 div
  */
 export function TermPane(props: TermPaneProps): ReactElement {
-  const { instance, active, onExit, fontFamily, fontSize } = props;
+  const { instance, active, onExit, fontFamily, fontSize, lineHeight } = props;
   const { useEffect, useRef } = React;
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -74,11 +76,11 @@ export function TermPane(props: TermPaneProps): ReactElement {
      */
     const term = new Terminal({
       cursorBlink: true,
-      /* 字体族/字号经 Config（或 env）下发，空串/缺省回落内置默认——字体栈
+      /* 字体族/字号/行高经 Config（或 env）下发，空串/缺省回落内置默认——字体栈
        * 最前放本机 Nerd Font（如 Maple Mono NF CN）即可正确显示图标字形 */
       fontFamily: fontFamily !== '' ? fontFamily : TERM_FONT_FAMILY,
       fontSize: fontSize ?? TERM_FONT_SIZE,
-      lineHeight: TERM_LINE_HEIGHT,
+      lineHeight: lineHeight ?? TERM_LINE_HEIGHT,
       scrollback: TERM_SCROLLBACK,
       drawBoldTextInBrightColors: false,
       theme: TERM_THEME,
@@ -162,6 +164,44 @@ export function TermPane(props: TermPaneProps): ReactElement {
       wsRef.current = null;
     };
   }, [instance.id, onExit]);
+
+  /* 字体热更新：fontFamily/fontSize/lineHeight 变更时更新 xterm options 并重算尺寸 */
+  useEffect(() => {
+    const term = termRef.current;
+    const fit = fitRef.current;
+    if (term === null || fit === null) return;
+    
+    /* 解析生效值：空串/undefined 回落内置默认 */
+    const effectiveFamily = fontFamily !== '' ? fontFamily : TERM_FONT_FAMILY;
+    const effectiveSize = fontSize ?? TERM_FONT_SIZE;
+    const effectiveLineHeight = lineHeight ?? TERM_LINE_HEIGHT;
+    
+    /* 只在值真正变化时更新（避免初始挂载时重复设置） */
+    let changed = false;
+    if (term.options.fontFamily !== effectiveFamily) {
+      term.options.fontFamily = effectiveFamily;
+      changed = true;
+    }
+    if (term.options.fontSize !== effectiveSize) {
+      term.options.fontSize = effectiveSize;
+      changed = true;
+    }
+    if (term.options.lineHeight !== effectiveLineHeight) {
+      term.options.lineHeight = effectiveLineHeight;
+      changed = true;
+    }
+    
+    if (changed) {
+      /* clearTextureAtlas 清除字体测量缓存，让 xterm 用新字体重测字符尺寸 */
+      term.clearTextureAtlas();
+      /* 重新 fit 让行列数按新字符尺寸重算，避免 PTY 尺寸与渲染错位 */
+      requestAnimationFrame(() => {
+        try {
+          fit.fit();
+        } catch { /* 面板可能已卸载 */ }
+      });
+    }
+  }, [fontFamily, fontSize, lineHeight]);
 
   /* 激活：fit（尺寸可能已变）+ 聚焦 */
   useEffect(() => {

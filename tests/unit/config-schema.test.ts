@@ -11,7 +11,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import type z from '@deepseek-ai/schemastery';
 import { Config } from '../../src/index.js';
-import { DEFAULT_TOGGLE_SHORTCUT, DEFAULT_FONT_SIZE } from '../../src/constants.js';
+import { DEFAULT_TOGGLE_SHORTCUT, DEFAULT_FONT_SIZE, DEFAULT_LINE_HEIGHT } from '../../src/constants.js';
 
 // Config 的值导出是 schemastery 实例；interface Config 与 const Config 同名
 // （值/类型空间分离），测试里以 unknown 收窄后再断言最小形状
@@ -24,11 +24,17 @@ function field(name: string): { meta: Record<string, unknown> } | undefined {
   return node === undefined ? undefined : node as { meta: Record<string, unknown> };
 }
 
+/** 取字段 description 文本（非 string 时返回空串，便于断言安全展开） */
+function description(name: string): string {
+  const value = field(name)?.meta.description;
+  return typeof value === 'string' ? value : '';
+}
+
 describe('Config schema 形状', () => {
-  it('是 object schema 且声明四个字段', () => {
+  it('是 object schema 且声明五个字段', () => {
     assert.equal((schema as unknown as { type?: string }).type, 'object');
     const dict = (schema as unknown as { dict?: Record<string, unknown> }).dict;
-    assert.deepEqual(Object.keys(dict ?? {}).sort(), ['fontFamily', 'fontSize', 'shellCommand', 'toggleShortcut']);
+    assert.deepEqual(Object.keys(dict ?? {}).sort(), ['fontFamily', 'fontSize', 'lineHeight', 'shellCommand', 'toggleShortcut']);
   });
 
   it('toggleShortcut 带 volatile 标记（GUI 表单可见 + 免重启热更新）', () => {
@@ -55,18 +61,40 @@ describe('Config schema 形状', () => {
     assert.equal(node?.meta.volatile, true);
   });
 
-  it('四字段带默认值（空配置时回落），符合全字段给 default 的约束', () => {
+  it('lineHeight 带 volatile 标记', () => {
+    const node = field('lineHeight');
+    assert.notEqual(node, undefined);
+    assert.equal(node?.meta.volatile, true);
+  });
+
+  it('五字段带默认值（空配置时回落），符合全字段给 default 的约束', () => {
     assert.equal(field('toggleShortcut')?.meta.default, DEFAULT_TOGGLE_SHORTCUT);
     assert.equal(field('shellCommand')?.meta.default, '');
     assert.equal(field('fontFamily')?.meta.default, '');
     assert.equal(field('fontSize')?.meta.default, DEFAULT_FONT_SIZE);
+    assert.equal(field('lineHeight')?.meta.default, DEFAULT_LINE_HEIGHT);
   });
 
-  it('四字段带 description（GUI 表单的字段说明）', () => {
-    assert.equal(typeof field('toggleShortcut')?.meta.description, 'string');
-    assert.equal(typeof field('shellCommand')?.meta.description, 'string');
-    assert.equal(typeof field('fontFamily')?.meta.description, 'string');
-    assert.equal(typeof field('fontSize')?.meta.description, 'string');
+  it('五字段带 description（GUI 表单的字段说明）', () => {
+    for (const name of ['toggleShortcut', 'shellCommand', 'fontFamily', 'fontSize', 'lineHeight']) {
+      assert.equal(typeof field(name)?.meta.description, 'string', `${name} 缺 description`);
+    }
+  });
+
+  it('fontFamily 的 description 不含中文弯引号（会被 CSS 当作字体名一部分）', () => {
+    // 字段说明里的示例字体名是给用户直接复制的——弯引号 U+2018/U+2019 会让
+    // CSS 解析出一个永不匹配的字体名，表现为「照抄后图标依旧乱码且无报错」
+    const text = description('fontFamily');
+    assert.ok(!text.includes('\u2018'), 'fontFamily description 含左弯引号 U+2018');
+    assert.ok(!text.includes('\u2019'), 'fontFamily description 含右弯引号 U+2019');
+  });
+
+  it('字体三项的 description 说明配置即时生效（运行期热更新契约）', () => {
+    // 三项均经 xterm options 运行期更新，已在说明里承诺「即时生效」——
+    // 若前端退回 init-only 取值，这段文案会失真，故在此锁定契约
+    for (const name of ['fontFamily', 'fontSize', 'lineHeight']) {
+      assert.ok(description(name).includes('即时生效'), `${name} description 未声明即时生效`);
+    }
   });
 
   it('toJSON 可序列化（SettingsForms.describe 生成表单的输入）', () => {
@@ -75,5 +103,6 @@ describe('Config schema 形状', () => {
     assert.ok(json.includes('shellCommand'));
     assert.ok(json.includes('fontFamily'));
     assert.ok(json.includes('fontSize'));
+    assert.ok(json.includes('lineHeight'));
   });
 });

@@ -87,6 +87,8 @@ export interface ConfigResponse {
   fontFamily?: string;
   /** 终端字号（像素；缺省时用内置默认值） */
   fontSize?: number;
+  /** 终端行高倍数；缺省时用内置默认值 */
+  lineHeight?: number;
   /** 可选的终端种类列表 */
   terminalTypes?: TerminalType[];
 }
