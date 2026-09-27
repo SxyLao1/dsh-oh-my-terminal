@@ -28,7 +28,7 @@ import { platform } from './platform.js';
 import type { SessionStore } from './persistence.js';
 import type { SessionRecord } from './persistence.js';
 import type { TerminalProfile } from './terminal/index.js';
-import { resolveProfile } from './terminal/index.js';
+import { resolveProfile, getKindOptions } from './terminal/index.js';
 
 const log = createLogger('terminal-host');
 
@@ -368,6 +368,12 @@ export function createRouteHandler(
           terminalProfiles: profiles,
           protocolVersion: PROTOCOL_VERSION,
         });
+        return;
+      }
+
+      // GET /terminal-kinds — 终端类型列表（供配置表单下拉菜单使用）
+      if (rest === '/terminal-kinds' && method === 'GET') {
+        json(res, 200, { kinds: getKindOptions() });
         return;
       }
 
