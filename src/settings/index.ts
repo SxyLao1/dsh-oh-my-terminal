@@ -62,8 +62,12 @@ export function registerSettingsNamespace(ctx: Context, schema: unknown): void {
     interface SettingsFacade {
       /** 新宿主可选能力：关闭自动写回；旧宿主（0.1.5 系）无此方法 */
       configure?: (options: { auto: boolean }, fiber?: unknown) => void;
-      /** 注册命名空间 schema；重复注册抛 "already registered" */
-      register(ns: string, schema: unknown): unknown;
+      /**
+       * 注册命名空间 schema；重复注册抛 "already registered"。
+       * 可选——宿主 SettingsForms 靠 cordis loader entries 发现命名空间，
+       * 不一定提供此方法（如 0.1.7-rc.1 的 SettingsForms 无 register）。
+       */
+      register?: (ns: string, schema: unknown) => unknown;
     }
     const facade = sctx.settings as unknown as SettingsFacade;
 
@@ -83,11 +87,18 @@ export function registerSettingsNamespace(ctx: Context, schema: unknown): void {
       });
     }
 
-    try {
-      facade.register(SETTINGS_NS, schema);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (!message.includes('already registered')) throw error;
+    // register 同样逐能力探测——宿主 SettingsForms 靠 cordis loader entries
+    // （configEditor.configuration()）发现命名空间，不一定提供 register 方法
+    // （0.1.7-rc.1 的 SettingsForms 无此方法）。方法不存在时跳过，不抛 TypeError；
+    // 方法存在时重复注册（热重载、重复 apply）抛 "already registered"，作为幂等
+    // 情形吞掉；其余注册失败（如存储段损坏）如实上抛，不把失败包装成成功。
+    if (typeof facade.register === 'function') {
+      try {
+        facade.register(SETTINGS_NS, schema);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!message.includes('already registered')) throw error;
+      }
     }
   });
 }

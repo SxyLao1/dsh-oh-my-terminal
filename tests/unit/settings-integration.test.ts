@@ -24,8 +24,12 @@ interface RegisterCall {
   schema: unknown;
 }
 
-/** 假 settings 服务：可选 configure 模拟不同宿主版本的暴露面 */
-function makeFakeSettings(options: { withConfigure?: boolean; failRegisterWith?: Error } = {}): {
+/** 假 settings 服务：可选 configure/register 模拟不同宿主版本的暴露面 */
+function makeFakeSettings(options: {
+  withConfigure?: boolean;
+  withRegister?: boolean;
+  failRegisterWith?: Error;
+} = {}): {
   settings: Record<string, unknown>;
   registerCalls: RegisterCall[];
   configureCalls: unknown[];
@@ -33,7 +37,14 @@ function makeFakeSettings(options: { withConfigure?: boolean; failRegisterWith?:
   const registerCalls: RegisterCall[] = [];
   const configureCalls: unknown[] = [];
   const settings: Record<string, unknown> = {
-    register(ns: string, schema: unknown): unknown {
+    describe: async (): Promise<unknown> => [],
+    mutate: async (): Promise<unknown> => undefined,
+    writable: true,
+  };
+  // register 可选——0.1.7-rc.1 的 SettingsForms 靠 cordis loader entries 发现
+  // 命名空间，不提供 register 方法
+  if (options.withRegister !== false) {
+    settings.register = (ns: string, schema: unknown): unknown => {
       if (options.failRegisterWith !== undefined) throw options.failRegisterWith;
       registerCalls.push({ ns, schema });
       return {
@@ -42,11 +53,8 @@ function makeFakeSettings(options: { withConfigure?: boolean; failRegisterWith?:
         update: async (): Promise<void> => undefined,
         replace: async (): Promise<void> => undefined,
       };
-    },
-    describe: async (): Promise<unknown> => [],
-    mutate: async (): Promise<unknown> => undefined,
-    writable: true,
-  };
+    };
+  }
   if (options.withConfigure === true) {
     settings.configure = (value: unknown): void => {
       configureCalls.push(value);
@@ -111,5 +119,14 @@ describe('settings 集成注册', () => {
       () => registerSettingsIntegration(makeFakeContext(settings), { marker: 'x' }),
       /存储段损坏/u,
     );
+  });
+
+  it('宿主无 register 方法时不抛 TypeError（靠 cordis loader entries 发现命名空间）', () => {
+    const { settings, registerCalls } = makeFakeSettings({ withRegister: false });
+    assert.doesNotThrow(() => {
+      registerSettingsIntegration(makeFakeContext(settings), { marker: 'x' });
+    });
+    // 宿主无 register——registerCalls 为空，但不抛错
+    assert.equal(registerCalls.length, 0);
   });
 });
