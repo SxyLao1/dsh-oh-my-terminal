@@ -321,8 +321,11 @@ export function apply(ctx: Context, config: Config): void {
    * @param channel - settings 命名空间读写通道（settings/index.ts 逐能力探测）
    */
   function settleProfiles(channel: SettingsChannel): void {
-    const raw = channel.read()?.terminalProfiles ?? config.terminalProfiles.get();
-    const saved = parseProfiles(typeof raw === 'string' ? raw : undefined);
+    const persisted = channel.read()?.terminalProfiles;
+    // 通道值非字符串（宿主异常形态，如未解包的 volatile 引用）时回落 volatile
+    // 配置读；空串是合法的"用户清空配置表"，不再回落
+    const raw = typeof persisted === 'string' ? persisted : config.terminalProfiles.get();
+    const saved = parseProfiles(raw);
     const { merged, persistPayload } = settleProfileTable(saved, detectedProfiles);
 
     // 首跑落盘：异步写回，失败只降级警告（只读 profile /老宿主不阻断启动）

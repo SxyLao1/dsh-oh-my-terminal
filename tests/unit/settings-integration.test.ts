@@ -208,4 +208,51 @@ describe('settings 命名空间读写通道', () => {
       /无法落盘/u,
     );
   });
+
+  /** 构造 schemastery volatile 字段的解析产物形态（cosmokit 稳定引用） */
+  function volatileRef(value: unknown): unknown {
+    return Object.freeze({
+      get: (): unknown => value,
+      [Symbol.for('cosmokit.volatile.write')]: (): void => undefined,
+    });
+  }
+
+  it('volatile 字段的稳定引用在通道内解包为标量（回归：解包缺失致读回恒空、每轮判首跑）', () => {
+    const settings = {
+      register: (): unknown => ({
+        get: (): unknown => ({
+          terminalProfiles: volatileRef('[{"id":"t-a"}]'),
+          fontFamily: volatileRef(''),
+          fontSize: volatileRef(12.5),
+        }),
+      }),
+    };
+    const channel = captureChannel(settings);
+    assert.deepEqual(channel?.read(), {
+      terminalProfiles: '[{"id":"t-a"}]',
+      fontFamily: '',
+      fontSize: 12.5,
+    });
+  });
+
+  it('describe 兜底路径同样解包 volatile 引用', () => {
+    const settings = {
+      describe: (): unknown => [{
+        ns: SETTINGS_NS,
+        value: { terminalProfiles: volatileRef('[{"id":"t-b"}]') },
+      }],
+    };
+    const channel = captureChannel(settings);
+    assert.deepEqual(channel?.read(), { terminalProfiles: '[{"id":"t-b"}]' });
+  });
+
+  it('普通值原样透传，不被误判为引用', () => {
+    const settings = {
+      register: (): unknown => ({
+        get: (): unknown => ({ terminalProfiles: '[{"id":"t-c"}]' }),
+      }),
+    };
+    const channel = captureChannel(settings);
+    assert.deepEqual(channel?.read(), { terminalProfiles: '[{"id":"t-c"}]' });
+  });
 });
