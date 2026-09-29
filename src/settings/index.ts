@@ -24,6 +24,79 @@ export { createSettingsBridgeRoutes } from './bridge.js';
 // —— 插件集成辅助函数 ——
 
 /**
+ * settings 命名空间读写通道（{@link registerSettingsNamespace} 就绪回调的入参）。
+ *
+ * 读走命名空间的解析值（schema 默认 → base → user 层合并），与 update 写入的
+ * user 层同源可见——首跑落盘写进去的值下次启动能从这里读回来。不同宿主的
+ * settings 服务暴露面不同，read/update 内部逐能力探测：read 探测不到返回
+ * undefined（调用方按"读不到"降级），update 探测不到时返回 rejected promise
+ * （调用方按写失败降级）。
+ */
+export interface SettingsChannel {
+  /** 读取本命名空间的解析值；宿主能力不足或命名空间不可读时返回 undefined */
+  read(): Record<string, unknown> | undefined;
+  /** 合并写入本命名空间的 user 层 */
+  update(patch: Record<string, unknown>): Promise<void>;
+}
+
+/** settings 服务注册命名空间返回的 owner 能力面（按需探测，不同宿主缺项） */
+interface SettingsOwnerScope {
+  /** 读取本命名空间解析值 */
+  get?: () => unknown;
+  /** 合并写入本命名空间 user 层 */
+  update?: (patch: Record<string, unknown>) => Promise<void>;
+}
+
+/** settings 服务能力面（不同宿主版本暴露面不同，逐能力探测） */
+interface SettingsFacade {
+  /** 新宿主可选能力：关闭自动写回；旧宿主（0.1.5 系）无此方法 */
+  configure?: (options: { auto: boolean }, fiber?: unknown) => void;
+  /**
+   * 注册命名空间 schema；重复注册抛 "already registered"。
+   * 可选——宿主 SettingsForms 靠 cordis loader entries 发现命名空间，
+   * 不一定提供此方法（如 0.1.7-rc.1 的 SettingsForms 无 register）。
+   */
+  register?: (ns: string, schema: unknown) => unknown;
+  /** 服务级读取命名空间解析值（register 缺失时的读回通道） */
+  get?: (ns: string) => unknown;
+  /** 服务级命名空间快照列表（register 与 get 都缺失时的兜底读回通道） */
+  describe?: () => Array<{ ns: string; value: unknown }>;
+  /** 服务级合并写入（owner scope 缺失时的落盘通道） */
+  update?: (ns: string, patch: Record<string, unknown>) => Promise<void>;
+}
+
+/**
+ * 逐能力探测读取命名空间解析值。
+ *
+ * 优先 owner scope（注册即所得），其次服务级 get，最后 describe 扫描——
+ * 三条通道读到的都是同一份解析值，差别只在宿主暴露面。全部探测不到时返回
+ * undefined，调用方按"读不到"降级，不伪造空配置。
+ *
+ * @param facade - settings 服务实例
+ * @param owner - register 返回的 owner scope（未注册成功时为 undefined）
+ * @returns 命名空间解析值对象；读不到时 undefined
+ */
+function readNamespaceValue(
+  facade: SettingsFacade,
+  owner: SettingsOwnerScope | undefined,
+): Record<string, unknown> | undefined {
+  const candidates: unknown[] = [];
+  if (typeof owner?.get === 'function') {
+    candidates.push(owner.get());
+  } else {
+    if (typeof facade.get === 'function') candidates.push(facade.get(SETTINGS_NS));
+    if (typeof facade.describe === 'function') {
+      const descriptor = facade.describe().find((d) => d.ns === SETTINGS_NS);
+      if (descriptor !== undefined) candidates.push(descriptor.value);
+    }
+  }
+  for (const value of candidates) {
+    if (value !== null && typeof value === 'object') return value as Record<string, unknown>;
+  }
+  return undefined;
+}
+
+/**
  * 注册 settings 集成（在插件主入口调用）
  *
  * settings 集成分两步：
@@ -54,21 +127,17 @@ export { createSettingsBridgeRoutes } from './bridge.js';
  *
  * @param ctx - cordis 上下文
  * @param schema - 插件 Config 的 schemastery schema
+ * @param onReady - settings 就绪回调，在命名空间注册（或确认宿主无 register）
+ *   之后同步触发，入参是同命名空间的读写通道——首跑落盘/读回落定用它保证
+ *   读写同一通道，避免 apply 期读 volatile、写 settings 的通道错位
  */
-export function registerSettingsNamespace(ctx: Context, schema: unknown): void {
+export function registerSettingsNamespace(
+  ctx: Context,
+  schema: unknown,
+  onReady?: (channel: SettingsChannel) => void,
+): void {
   // 注册命名空间 +（可选）关闭自动模式——软探测，服务不存在时不激活
   ctx.inject(['settings'], (sctx) => {
-    /** settings 服务能力面（不同宿主版本暴露面不同，逐能力探测） */
-    interface SettingsFacade {
-      /** 新宿主可选能力：关闭自动写回；旧宿主（0.1.5 系）无此方法 */
-      configure?: (options: { auto: boolean }, fiber?: unknown) => void;
-      /**
-       * 注册命名空间 schema；重复注册抛 "already registered"。
-       * 可选——宿主 SettingsForms 靠 cordis loader entries 发现命名空间，
-       * 不一定提供此方法（如 0.1.7-rc.1 的 SettingsForms 无 register）。
-       */
-      register?: (ns: string, schema: unknown) => unknown;
-    }
     const facade = sctx.settings as unknown as SettingsFacade;
 
     // configure 仅在宿主提供时调用——0.1.5 系宿主的 settings 服务没有该方法，
@@ -92,13 +161,26 @@ export function registerSettingsNamespace(ctx: Context, schema: unknown): void {
     // （0.1.7-rc.1 的 SettingsForms 无此方法）。方法不存在时跳过，不抛 TypeError；
     // 方法存在时重复注册（热重载、重复 apply）抛 "already registered"，作为幂等
     // 情形吞掉；其余注册失败（如存储段损坏）如实上抛，不把失败包装成成功。
+    let owner: SettingsOwnerScope | undefined;
     if (typeof facade.register === 'function') {
       try {
-        facade.register(SETTINGS_NS, schema);
+        owner = facade.register(SETTINGS_NS, schema) as SettingsOwnerScope | undefined;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (!message.includes('already registered')) throw error;
       }
+    }
+
+    // 就绪回调在注册之后触发：回调内的任何读写都能看到已注册的命名空间
+    if (onReady !== undefined) {
+      onReady({
+        read: () => readNamespaceValue(facade, owner),
+        update: (patch) => {
+          if (typeof owner?.update === 'function') return owner.update(patch);
+          if (typeof facade.update === 'function') return facade.update(SETTINGS_NS, patch);
+          return Promise.reject(new Error('settings 服务不提供 update，配置无法落盘'));
+        },
+      });
     }
   });
 }
